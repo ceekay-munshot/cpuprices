@@ -5,6 +5,7 @@ import { downloadCsv } from './csv';
 import { fmtDateTime, fmtPrice } from './format';
 import Header from './components/Header';
 import StatusStrip from './components/StatusStrip';
+import TabNav, { TabPanel, type Tab } from './components/TabNav';
 import HeroCards from './components/HeroCards';
 import MainTable, { computeRows, type ComputedRow } from './components/MainTable';
 import EvidenceDrawer from './components/EvidenceDrawer';
@@ -17,6 +18,7 @@ import Methodology from './components/Methodology';
 export default function App() {
   const status = useApi(api.status);
   const prices = useApi(api.currentPrices);
+  const [tab, setTab] = useState<Tab>('tracker');
   const [evidence, setEvidence] = useState<ComputedRow | null>(null);
 
   const reloadAll = useCallback(() => {
@@ -24,9 +26,15 @@ export default function App() {
     prices.reload();
   }, [status, prices]);
 
+  // Tab switches close any open evidence drawer — drawer rows live on the
+  // Pricing Tracker tab and would otherwise float over unrelated content.
+  const onTabChange = useCallback((next: Tab) => {
+    setTab(next);
+    setEvidence(null);
+  }, []);
+
   const onDownload = useCallback(() => {
     if (!prices.data) return;
-    // Export the SAME shape as the main table (the customer-facing object).
     const rows = computeRows(prices.data.rows);
     const headers = [
       'Manufacturer', 'Product Type',
@@ -48,28 +56,41 @@ export default function App() {
     downloadCsv(`cpu-pricing-tracker-${stamp}.csv`, headers, csvRows);
   }, [prices.data, status.data]);
 
+  const basketCount = prices.data?.count ?? null;
+
   return (
     <>
       <Header status={status.data} onRefresh={reloadAll} onDownload={onDownload} />
       <StatusStrip status={status.data} loading={status.loading} error={status.error} />
+      <TabNav tab={tab} onChange={onTabChange} basketCount={basketCount} />
+
       <main className="app-main">
-        <HeroCards currentPrices={prices.data?.rows ?? null} />
-        <MainTable
-          currentPrices={prices.data?.rows ?? null}
-          loading={prices.loading}
-          error={prices.error}
-          onEvidence={setEvidence}
-        />
-        <PassmarkModule />
-        <TrackedBasket
-          rows={prices.data?.rows ?? null}
-          loading={prices.loading}
-          error={prices.error}
-        />
-        <PriceChanges />
-        <SkuHistory basket={prices.data?.rows ?? null} />
-        <Methodology />
+        <TabPanel id="tracker" active={tab === 'tracker'}>
+          <HeroCards currentPrices={prices.data?.rows ?? null} />
+          <MainTable
+            currentPrices={prices.data?.rows ?? null}
+            loading={prices.loading}
+            error={prices.error}
+            onEvidence={setEvidence}
+          />
+          <PassmarkModule />
+        </TabPanel>
+
+        <TabPanel id="basket" active={tab === 'basket'}>
+          <TrackedBasket
+            rows={prices.data?.rows ?? null}
+            loading={prices.loading}
+            error={prices.error}
+          />
+          <PriceChanges />
+          <SkuHistory basket={prices.data?.rows ?? null} />
+        </TabPanel>
+
+        <TabPanel id="methodology" active={tab === 'methodology'}>
+          <Methodology />
+        </TabPanel>
       </main>
+
       <EvidenceDrawer row={evidence} onClose={() => setEvidence(null)} />
     </>
   );

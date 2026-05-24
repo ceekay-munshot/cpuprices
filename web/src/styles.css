@@ -167,12 +167,69 @@ a:hover { text-decoration: underline; }
   font-family: var(--font-mono); color: var(--text-on-dark); font-weight: 600;
 }
 
+/* ---------- top-level tab nav (under the status strip) ---------- */
+
+.tabnav {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-strong);
+  padding: 0 var(--sp-5);
+}
+.tabnav__inner {
+  display: flex;
+  gap: var(--sp-5);
+  max-width: 1440px;
+  margin: 0 auto;
+}
+.tabnav__btn {
+  background: transparent;
+  border: none;
+  padding: 12px 2px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  display: inline-flex;
+  align-items: center;
+}
+.tabnav__btn:hover { color: var(--text-primary); }
+.tabnav__btn--active {
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+}
+.tabnav__count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  background: var(--bg-chip);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.tabnav__btn--active .tabnav__count {
+  background: var(--bg-chip-active);
+  color: var(--text-on-dark);
+}
+
 /* ---------- main canvas ---------- */
 
 .app-main {
   max-width: 1440px; margin: 0 auto;
   padding: var(--sp-5) var(--sp-5) var(--sp-7);
   display: flex; flex-direction: column; gap: var(--sp-5);
+}
+
+/* TabPanel wraps each tab's sections; preserve the vertical-flex layout the
+ * sections used to get directly from .app-main. */
+.tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
 }
 
 .section {
