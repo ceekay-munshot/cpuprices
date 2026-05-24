@@ -1,0 +1,10 @@
+{
+  "sources": [
+    {
+      "slug": "cpubenchmark",
+      "name": "PassMark CPU Benchmark",
+      "base_url": "https://www.cpubenchmark.net",
+      "is_active": true
+    }
+  ]
+}

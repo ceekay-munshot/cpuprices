@@ -1,0 +1,46 @@
+{
+  "name": "cpuprices",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CPU pricing tracker dashboard for Tybourne.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "wrangler pages dev",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/shared/money.test.ts src/shared/normalize.test.ts src/shared/vendor.test.ts",
+    "scrape": "tsx src/scraper/run.ts",
+    "scrape:dry": "tsx src/scraper/run.ts --dry-run",
+    "scrape:verify:intel": "tsx scripts/verify-intel.ts",
+    "scrape:local:intel": "tsx scripts/scrape-local-intel.ts",
+    "scrape:local:amd": "tsx scripts/scrape-local-amd.ts",
+    "scrape:local:all": "tsx scripts/scrape-local-all.ts",
+    "sync:local": "tsx scripts/sync-config.ts --local",
+    "sync:remote": "tsx scripts/sync-config.ts --remote",
+    "migrate:local": "wrangler d1 migrations apply cpuprices --local",
+    "migrate:remote": "wrangler d1 migrations apply cpuprices --remote",
+    "query": "tsx scripts/query.ts"
+  },
+  "dependencies": {
+    "chart.js": "^4.4.4",
+    "react": "^18.3.1",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241022.0",
+    "@types/node": "^20.16.10",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "playwright": "^1.48.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8",
+    "wrangler": "^3.80.0"
+  }
+}

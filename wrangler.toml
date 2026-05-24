@@ -1,0 +1,12 @@
+name = "cpuprices"
+compatibility_date = "2026-05-01"
+pages_build_output_dir = "./web/dist"
+
+# D1 binding for Pages Functions (read API under functions/api/).
+# The scraper does NOT use this binding — it writes to D1 from GitHub Actions
+# via the Cloudflare D1 REST API using CLOUDFLARE_* secrets.
+[[d1_databases]]
+binding = "DB"
+database_name = "cpuprices"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "./migrations"

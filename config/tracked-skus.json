@@ -1,0 +1,130 @@
+{
+  "skus": [
+    {
+      "name": "Intel Core Ultra 9 285K",
+      "vendor": "Intel",
+      "bucket": "Desktop Intel",
+      "tier": "Core Ultra 9",
+      "aliases": {
+        "cpubenchmark": ["Intel Core Ultra 9 285K"]
+      }
+    },
+    {
+      "name": "Intel Core Ultra 7 265K",
+      "vendor": "Intel",
+      "bucket": "Desktop Intel",
+      "tier": "Core Ultra 7",
+      "aliases": {
+        "cpubenchmark": ["Intel Core Ultra 7 265K"]
+      }
+    },
+    {
+      "name": "Intel Core Ultra 7 265KF",
+      "vendor": "Intel",
+      "bucket": "Desktop Intel",
+      "tier": "Core Ultra 7",
+      "aliases": {
+        "cpubenchmark": ["Intel Core Ultra 7 265KF"]
+      }
+    },
+    {
+      "name": "Intel Core Ultra 5 245K",
+      "vendor": "Intel",
+      "bucket": "Desktop Intel",
+      "tier": "Core Ultra 5",
+      "aliases": {
+        "cpubenchmark": ["Intel Core Ultra 5 245K"]
+      }
+    },
+    {
+      "name": "Intel Core Ultra 5 245KF",
+      "vendor": "Intel",
+      "bucket": "Desktop Intel",
+      "tier": "Core Ultra 5",
+      "aliases": {
+        "cpubenchmark": ["Intel Core Ultra 5 245KF"]
+      }
+    },
+    {
+      "name": "Intel Core Ultra 5 235",
+      "vendor": "Intel",
+      "bucket": "Desktop Intel",
+      "tier": "Core Ultra 5",
+      "aliases": {
+        "cpubenchmark": ["Intel Core Ultra 5 235"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 9 9950X3D",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 9",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 9 9950X3D"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 9 9950X",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 9",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 9 9950X"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 9 9900X3D",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 9",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 9 9900X3D"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 9 9900X",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 9",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 9 9900X"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 7 9800X3D",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 7",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 7 9800X3D"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 7 9700X",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 7",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 7 9700X"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 5 9600X",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 5",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 5 9600X"]
+      }
+    },
+    {
+      "name": "AMD Ryzen 5 9600",
+      "vendor": "AMD",
+      "bucket": "Desktop AMD",
+      "tier": "Ryzen 5",
+      "aliases": {
+        "cpubenchmark": ["AMD Ryzen 5 9600"]
+      }
+    }
+  ]
+}
