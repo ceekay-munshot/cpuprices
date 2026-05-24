@@ -11,7 +11,7 @@
     "dev": "wrangler pages dev",
     "dev:web": "vite --config web/vite.config.ts",
     "build": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p functions/tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p functions/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "verify:api": "bash scripts/verify-api.sh",
     "test": "node --import tsx --test src/shared/money.test.ts src/shared/normalize.test.ts src/shared/vendor.test.ts",
     "scrape": "tsx src/scraper/run.ts",
