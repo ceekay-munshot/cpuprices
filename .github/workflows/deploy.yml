@@ -1,0 +1,119 @@
+name: deploy
+
+# Build + deploy the dashboard to Cloudflare Pages.
+#
+# Project naming (do not conflate):
+#   - Wrangler project slug:  cpuprices            <- what --project-name= matches
+#   - Public hostname:        cpuprices-bzr.pages.dev
+#
+# - Triggers on push to main that touches build inputs: web/, functions/,
+#   wrangler.toml, package.json, package-lock.json. Pure README / scripts /
+#   migrations / scraper-source pushes do NOT redeploy.
+# - workflow_dispatch for manual deploys.
+# - concurrency: newer pushes supersede in-flight deploys.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   CLOUDFLARE_API_TOKEN     same token as scrape.yml; must additionally have
+#                            'Account · Cloudflare Pages · Edit' permission
+#   CLOUDFLARE_ACCOUNT_ID    same value as scrape.yml
+
+run-name: "deploy · ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'push' }} · run #${{ github.run_number }}"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'functions/**'
+      - 'wrangler.toml'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build + deploy to Cloudflare Pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PAGES_URL: https://cpuprices-bzr.pages.dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Sanity-check required secrets are present
+        run: |
+          set -e
+          for v in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::Required secret ${v} is missing or empty"
+              exit 1
+            fi
+          done
+          echo "Required secrets are set (values not displayed)."
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Type-check (web, functions, node)
+        run: npm run typecheck
+
+      - name: Build dashboard
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        # --project-name uses the Cloudflare project SLUG (cpuprices),
+        # NOT the public hostname (cpuprices-bzr.pages.dev).
+        run: |
+          npx wrangler pages deploy web/dist \
+            --project-name=cpuprices \
+            --branch=main \
+            --commit-dirty=true
+
+      - name: Verify deploy via live URL
+        run: |
+          set -euo pipefail
+          ts=$(date +%s)
+          fail=0
+          for path in "/" "/api/status"; do
+            url="${PAGES_URL}${path}?_=${ts}"
+            echo "GET ${url}"
+            code=$(curl -sS -o /tmp/resp.body -w '%{http_code}' \
+              --retry 5 --retry-delay 4 --max-time 30 \
+              "${url}" || echo "000")
+            echo "HTTP ${code}"
+            if [ "${code}" != "200" ]; then
+              echo "::error title=Deploy verification failed::${url} returned ${code}"
+              fail=1
+            fi
+          done
+          # Confirm the live root references a bundle hash that matches what we just built.
+          built_js=$(ls web/dist/assets/index-*.js 2>/dev/null | head -1 | xargs -n1 basename || true)
+          if [ -n "${built_js}" ]; then
+            live_js=$(curl -sS "${PAGES_URL}/?_=${ts}" | grep -oE 'index-[A-Za-z0-9_-]+\.js' | head -1)
+            echo "::notice title=Built bundle::${built_js}"
+            echo "::notice title=Live bundle::${live_js}"
+            if [ "${built_js}" != "${live_js}" ]; then
+              echo "::warning title=Bundle mismatch::live=${live_js} built=${built_js} (edge cache may take a moment to settle)"
+            fi
+          fi
+          if [ "${fail}" -ne 0 ]; then exit 1; fi
+          echo "Deploy verified: ${PAGES_URL} live."

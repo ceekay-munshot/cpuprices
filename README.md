@@ -149,12 +149,16 @@ Use the exact names listed in the table — the workflow reads them as-is.
 
 ## Deployment
 
-- **Cloudflare Pages project**: `cpuprices-bzr` (public URL: <https://cpuprices-bzr.pages.dev>). Manual deploys today: `npx wrangler pages deploy web/dist --project-name=cpuprices --branch=main` after `npm run build`. A Pages auto-deploy workflow will land later.
+> **Cloudflare Pages project name is `cpuprices`; public hostname is `cpuprices-bzr.pages.dev`.**
+> The `-bzr` suffix is on the hostname only — Cloudflare appended it because the bare `cpuprices.pages.dev` hostname was already claimed on another account. The Wrangler-side project slug stays `cpuprices`, so every deploy command uses `--project-name=cpuprices`.
+
+- **Pages auto-deploy**: `.github/workflows/deploy.yml` runs on push to `main` when `web/`, `functions/`, `wrangler.toml`, or `package*.json` changes; also available via `workflow_dispatch`. It runs `npm ci` + `npm run build` + `wrangler pages deploy web/dist --project-name=cpuprices --branch=main`, then verifies the live URL serves the new build.
+- **Manual deploy** (alternative to the workflow): `npx wrangler pages deploy web/dist --project-name=cpuprices --branch=main` after `npm run build`.
 - **Daily scrape**: `.github/workflows/scrape.yml` runs at `09:17 UTC` and is also available on demand:
   - GitHub UI: Actions → "scrape" → **Run workflow** → branch `main`
   - CLI: `gh workflow run scrape.yml`
   - Concurrency group `scrape-remote` serializes manual + cron triggers so they cannot collide.
-  - The job's final step queries the live `/api/status` (with cache-bust) and **fails the workflow** if `latest_run.status != "success"`.
+  - The job's final step queries the live `/api/status` (with cache-bust) and **fails the workflow** if `latest_run.status != "success"` or `observations_inserted <= 0`.
 - **Schema migrations**: still applied manually with `npm run migrate:remote` (a dispatch-only `migrate.yml` workflow can land later if you want a guarded path).
 
 ## Data Model
