@@ -1,0 +1,110 @@
+name: scrape
+
+# Daily PassMark /cpu-list/all capture into remote Cloudflare D1.
+#
+# - Schedule: 09:17 UTC daily (off the top-of-hour cron spike).
+# - Manual:   workflow_dispatch from the Actions tab, or `gh workflow run scrape.yml`.
+# - Serialized: a manual run and the scheduled cron cannot collide.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   CLOUDFLARE_API_TOKEN       same token used in local .env; needs Account:D1:Edit
+#   CLOUDFLARE_ACCOUNT_ID      same value as local .env
+#   CLOUDFLARE_D1_DATABASE_ID  4dd1653b-48d0-4c6b-88c4-1dbf9265fdb8 (also in wrangler.toml)
+
+run-name: "scrape · ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }} · run #${{ github.run_number }}"
+
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scrape-remote
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    name: Daily PassMark scrape into remote D1
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      # Public read URL used by the verification step.
+      PAGES_URL: https://cpuprices-bzr.pages.dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium + system deps
+        run: npx playwright install --with-deps chromium
+
+      - name: Sanity-check required secrets are present
+        run: |
+          set -e
+          for v in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_D1_DATABASE_ID; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::Required secret ${v} is missing or empty"
+              exit 1
+            fi
+          done
+          echo "All three required secrets are set (values not displayed)."
+
+      - name: Run remote scrape against Cloudflare D1
+        run: npm run scrape:remote:all
+
+      - name: Verify scrape success via live API
+        run: |
+          set -euo pipefail
+          # Cache-bust to bypass the 60s edge cache on /api/status responses.
+          URL="${PAGES_URL}/api/status?_t=$(date +%s)"
+          echo "GET ${URL}"
+          body=$(curl -sf --retry 3 --retry-delay 5 "${URL}")
+          echo "${body}" | jq .
+
+          run_status=$(echo "${body}" | jq -r '.data.latest_run.status // "missing"')
+          obs=$(echo "${body}" | jq -r '.data.source_observations_count // 0')
+          ph=$(echo "${body}" | jq -r '.data.price_history_count // 0')
+          matched=$(echo "${body}" | jq -r '.data.latest_run.tracked_skus_matched // 0')
+          missing=$(echo "${body}" | jq -r '.data.latest_run.tracked_skus_missing // -1')
+          rows_found=$(echo "${body}" | jq -r '.data.latest_run.rows_found // 0')
+          obs_inserted=$(echo "${body}" | jq -r '.data.latest_run.observations_inserted // 0')
+
+          echo
+          echo "::notice title=Latest scrape_runs.status::${run_status}"
+          echo "::notice title=rows_found::${rows_found}"
+          echo "::notice title=observations_inserted::${obs_inserted}"
+          echo "::notice title=source_observations total::${obs}"
+          echo "::notice title=price_history total::${ph}"
+          echo "::notice title=tracked SKUs matched / missing::${matched} / ${missing}"
+
+          # Fail unless BOTH conditions hold: the scrape closed as 'success'
+          # AND it actually inserted at least one observation row (guards
+          # against a deploy regression where the run closes cleanly but
+          # writes nothing).
+          fail=0
+          if [ "${run_status}" != "success" ]; then
+            echo "::error title=Scrape failed::latest_run.status='${run_status}' (expected 'success')"
+            fail=1
+          fi
+          if [ "${obs_inserted}" -le 0 ] 2>/dev/null; then
+            echo "::error title=Scrape failed::latest_run.observations_inserted='${obs_inserted}' (expected > 0)"
+            fail=1
+          fi
+          if [ "${fail}" -ne 0 ]; then exit 1; fi
+          echo "Scrape verified: status=success, observations_inserted=${obs_inserted}."

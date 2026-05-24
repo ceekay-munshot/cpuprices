@@ -131,19 +131,31 @@ response bodies and never echo headers.
 
 ## Required Secrets
 
-| Variable                     | Used by         | Purpose                                              |
-|------------------------------|-----------------|------------------------------------------------------|
-| `CLOUDFLARE_API_TOKEN`       | Scraper, CI     | API token with D1 read+write on `cpuprices`.         |
-| `CLOUDFLARE_ACCOUNT_ID`      | Scraper, CI     | Cloudflare account ID.                               |
-| `CLOUDFLARE_D1_DATABASE_ID`  | Scraper, CI     | Same ID stored in `wrangler.toml` `database_id`.     |
+| Variable                     | Used by                        | Purpose                                              |
+|------------------------------|--------------------------------|------------------------------------------------------|
+| `CLOUDFLARE_API_TOKEN`       | Scraper, sync, deploy, CI scrape | API token with `Account · D1 · Edit` (and `Account · Cloudflare Pages · Edit` for deploys) |
+| `CLOUDFLARE_ACCOUNT_ID`      | Scraper, sync, deploy, CI scrape | Cloudflare account ID                                |
+| `CLOUDFLARE_D1_DATABASE_ID`  | Scraper, sync, CI scrape          | `4dd1653b-48d0-4c6b-88c4-1dbf9265fdb8` (also in `wrangler.toml`) |
 
-Set these as GitHub Actions repository secrets for the scheduled scrape. Locally, copy `.env.example` to `.env`. **No frontend code reads these.** The dashboard only calls our read API, which uses the D1 binding.
+Locally, copy `.env.example` to `.env` and fill in the three values. `.env` is gitignored. **No frontend code reads these.** The dashboard only calls our read API, which uses Cloudflare Pages' bound D1 binding.
+
+### GitHub Actions secrets
+
+The names above are also the **GitHub Actions secret names** used by `.github/workflows/scrape.yml`. Add them in:
+
+> GitHub repo → **Settings → Secrets and variables → Actions** → **New repository secret** (×3)
+
+Use the exact names listed in the table — the workflow reads them as-is.
 
 ## Deployment
 
-- Push to `main` triggers `.github/workflows/deploy.yml` -> builds web and deploys Pages.
-- Scheduled scrape runs daily via `.github/workflows/scrape.yml`. Manual runs available via the GitHub Actions UI.
-- Schema and config changes go through `.github/workflows/migrate.yml` (dispatch-only) so they stay deliberate.
+- **Cloudflare Pages project**: `cpuprices-bzr` (public URL: <https://cpuprices-bzr.pages.dev>). Manual deploys today: `npx wrangler pages deploy web/dist --project-name=cpuprices --branch=main` after `npm run build`. A Pages auto-deploy workflow will land later.
+- **Daily scrape**: `.github/workflows/scrape.yml` runs at `09:17 UTC` and is also available on demand:
+  - GitHub UI: Actions → "scrape" → **Run workflow** → branch `main`
+  - CLI: `gh workflow run scrape.yml`
+  - Concurrency group `scrape-remote` serializes manual + cron triggers so they cannot collide.
+  - The job's final step queries the live `/api/status` (with cache-bust) and **fails the workflow** if `latest_run.status != "success"`.
+- **Schema migrations**: still applied manually with `npm run migrate:remote` (a dispatch-only `migrate.yml` workflow can land later if you want a guarded path).
 
 ## Data Model
 
