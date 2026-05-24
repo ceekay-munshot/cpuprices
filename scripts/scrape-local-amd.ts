@@ -1,10 +1,9 @@
 /**
  * AMD-only PassMark scrape into local D1.
  *
- * Thin entry point: loads tracked SKUs, runs the shared pipeline for
- * vendor='AMD', and prints the D1-backed audit table + run summary.
- *
- * Run: npm run scrape:local:amd
+ * Debug command: writes tracked rows only to price_history. Does NOT populate
+ * source_observations. Production / full-universe capture is
+ * `npm run scrape:local:all`, which uses /cpu-list/all.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -13,19 +12,21 @@ import { dirname, resolve } from 'node:path';
 
 import type { TrackedSkusFile } from '../src/shared/types';
 import { launchBrowser } from '../src/scraper/browser';
+import { createLocalD1Executor } from '../src/scraper/d1-client';
 import { scrapeAmdRows } from '../src/sources/cpubenchmark';
 import {
   makeStderrLogger,
   printRunTable,
-  scrapeVendorIntoLocalD1,
+  scrapeVendorIntoD1,
   type VendorRunResult,
-} from '../src/scraper/local-pipeline';
+} from '../src/scraper/pipeline';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 
 async function main() {
   const logger = makeStderrLogger();
+  const executor = createLocalD1Executor();
   const trackedFile: TrackedSkusFile = JSON.parse(
     await readFile(resolve(repoRoot, 'config/tracked-skus.json'), 'utf-8'),
   );
@@ -33,7 +34,8 @@ async function main() {
   const browser = await launchBrowser();
   let result: VendorRunResult;
   try {
-    result = await scrapeVendorIntoLocalD1({
+    result = await scrapeVendorIntoD1({
+      executor,
       vendor: 'AMD',
       trackedSkus: trackedFile.skus,
       scrape: scrapeAmdRows,
@@ -52,7 +54,7 @@ async function main() {
   console.log('  - Does NOT populate source_observations.');
   console.log('  - Production / full-universe capture is `npm run scrape:local:all` against /cpu-list/all.');
   console.log();
-  await printRunTable([result.scrapeRunId], { includeVendor: false });
+  await printRunTable(executor, [result.scrapeRunId], { includeVendor: false });
   console.log();
   console.log(`scrape_run_id:    ${result.scrapeRunId}`);
   console.log(`status:           ${result.status}`);

@@ -92,12 +92,42 @@ npm run build                     # Build web/ -> web/dist
 npm run typecheck                 # Type-check Node project
 npm test                          # Run shared-lib unit tests (money / normalize / vendor)
 
-# Scrape
+# Scrape into local D1
 npm run scrape:local:all          # PRODUCTION SHAPE — /cpu-list/all -> source_observations + price_history
 npm run scrape:local:intel        # debug — Intel-only page; price_history only, no source_observations
 npm run scrape:local:amd          # debug — AMD-only page; price_history only, no source_observations
 npm run scrape:verify:intel       # debug — Intel scrape with no D1 writes (prints table only)
+
+# Scrape into REMOTE Cloudflare D1 (needs CLOUDFLARE_* env vars set)
+npm run scrape:remote:all:dry-run # scrape + report; no D1 writes
+npm run scrape:remote:all         # scrape + double-write to remote source_observations + price_history
+npm run query:remote:status       # read-only: latest scrape_run row, total counts, vendor summary
 ```
+
+### Remote workflow
+
+The remote scrape uses the Cloudflare D1 REST API directly from Node (no
+wrangler subprocess). Same pipeline code path as the local scrape — the
+only difference is which `D1Executor` is wired in.
+
+1. Provision the database (one-time): `npx wrangler d1 create cpuprices` and
+   paste the returned UUID into `wrangler.toml`'s `database_id`.
+2. Set credentials in `.env` (see `.env.example`) or export in shell:
+   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_DATABASE_ID`.
+   `.env` is gitignored and auto-loaded by the remote commands; shell exports
+   win over file values.
+3. Apply schema + sync config + scrape:
+   ```bash
+   npm run migrate:remote
+   npm run sync:remote
+   npm run scrape:remote:all:dry-run    # always do a dry run first
+   npm run scrape:remote:all
+   npm run query:remote:status
+   ```
+
+Secrets are never written to logs, prints, or commits. The Authorization
+header is the only place the API token appears; error messages truncate
+response bodies and never echo headers.
 
 ## Required Secrets
 

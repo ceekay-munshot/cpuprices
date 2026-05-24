@@ -8,5 +8,5 @@ pages_build_output_dir = "./web/dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "cpuprices"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "4dd1653b-48d0-4c6b-88c4-1dbf9265fdb8"
 migrations_dir = "./migrations"

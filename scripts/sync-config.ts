@@ -3,19 +3,16 @@
  *
  * Generates a single idempotent SQL batch:
  *   - PRAGMA foreign_keys = ON;
- *   - BEGIN;
  *   - UPSERT each source by slug
  *   - UPSERT each canonical SKU by name
  *   - UPSERT each (source, alias) pair into source_sku_aliases
- *   - COMMIT;
+ *
+ * Local target uses wrangler subprocess; remote target uses the Cloudflare
+ * D1 REST API. Same SQL either way — only the executor differs.
  *
  * Usage:
- *   npm run sync:local   (tsx scripts/sync-config.ts --local)
- *   npm run sync:remote  (tsx scripts/sync-config.ts --remote)
- *
- * Remote support is stubbed for now — this v1 only wires up --local. The
- * remote path will use the D1 REST API and lands with the production
- * scraper.
+ *   npm run sync:local
+ *   npm run sync:remote
  */
 
 import { readFile } from 'node:fs/promises';
@@ -24,7 +21,13 @@ import { dirname, resolve } from 'node:path';
 
 import type { SourcesFile, TrackedSkusFile } from '../src/shared/types';
 import { normalizeCpuName } from '../src/shared/normalize';
-import { execLocalBatch, sqlString, sqlValue } from '../src/scraper/d1-local';
+import {
+  createLocalD1Executor,
+  createRemoteD1Executor,
+  sqlString,
+  sqlValue,
+  type D1Executor,
+} from '../src/scraper/d1-client';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -36,12 +39,7 @@ async function main() {
   if (local === remote) {
     throw new Error('Pass exactly one of --local or --remote.');
   }
-  if (remote) {
-    throw new Error(
-      'sync:remote is not yet wired. v1 supports --local only; remote sync ' +
-        'will land alongside the production scraper (REST API client).',
-    );
-  }
+  const executor: D1Executor = local ? createLocalD1Executor() : createRemoteD1Executor();
 
   const sourcesFile: SourcesFile = JSON.parse(
     await readFile(resolve(repoRoot, 'config/sources.json'), 'utf-8'),
@@ -54,20 +52,20 @@ async function main() {
 
   process.stderr.write(
     `[info] sync: ${sourcesFile.sources.length} source(s), ${skusFile.skus.length} SKU(s), ` +
-      `${countAliases(skusFile)} alias(es) -> local D1\n`,
+      `${countAliases(skusFile)} alias(es) -> ${executor.label} D1\n`,
   );
 
-  await execLocalBatch(sql);
+  await executor.execBatch(sql);
 
-  process.stderr.write('[info] sync: complete\n');
+  process.stderr.write(`[info] sync: complete (${executor.label})\n`);
 }
 
 function buildSyncSql(sourcesFile: SourcesFile, skusFile: TrackedSkusFile): string {
   const out: string[] = [];
-  // D1 rejects raw BEGIN/COMMIT (must use the JS batch API). wrangler runs
-  // --file statements sequentially; on interrupt the UPSERTs are idempotent
-  // so a rerun converges. PRAGMA foreign_keys is set for parity with the
-  // amendment; D1 may treat it as a no-op since it manages connections.
+  // D1 rejects raw BEGIN/COMMIT (must use the JS batch API). The REST API and
+  // wrangler --file both run statements sequentially; UPSERTs are idempotent
+  // so a rerun converges on the desired state. PRAGMA is set for parity even
+  // though D1 may treat it as a no-op given its connection model.
   out.push('PRAGMA foreign_keys = ON;');
 
   for (const s of sourcesFile.sources) {
