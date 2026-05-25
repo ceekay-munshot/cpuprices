@@ -142,10 +142,40 @@ export interface PriceChangesData {
   rows: PriceChangeRow[];
 }
 
+export interface ObservationRow {
+  source_sku_name: string;
+  normalized_source_name: string;
+  vendor_inferred: string | null;
+  segment_inferred: string | null;
+  benchmark_score: number | null;
+  rank: number | null;
+  cpu_value: number | null;
+  price_cents: number | null;
+  raw_price_text: string | null;
+  currency: string;
+  url: string | null;
+  scraped_at: string;
+  /** Closest historical price 7 days before the latest scrape. Null when no history yet. */
+  wow_price_cents: number | null;
+  /** Closest historical price 30 days before the latest scrape. Null when no history yet. */
+  mom_price_cents: number | null;
+  /** Closest historical price 90 days before the latest scrape. Null when no history yet. */
+  qoq_price_cents: number | null;
+}
+
+export interface ObservationsData {
+  source_note: string;
+  latest_scrape_run_id: number | null;
+  latest_scraped_at: string | null;
+  count: number;
+  rows: ObservationRow[];
+}
+
 export const api = {
   status: () => call<StatusData>('/api/status'),
   vendorSummary: () => call<VendorSummaryData>('/api/passmark/vendor-summary'),
   currentPrices: () => call<CurrentPricesData>('/api/current-prices'),
   skuHistory: (id: number) => call<SkuHistoryData>(`/api/sku-history?sku_id=${id}`),
   priceChanges: () => call<PriceChangesData>('/api/price-changes'),
+  observations: () => call<ObservationsData>('/api/observations'),
 };

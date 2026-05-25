@@ -7,6 +7,12 @@ interface Props {
   error: string | null;
 }
 
+/**
+ * Universal status strip. After the basket tab was removed, this shows only
+ * universe-scoped facts: when the source was scraped, how many CPUs that
+ * scrape returned, and the cumulative observation count across every scrape
+ * on record.
+ */
 export default function StatusStrip({ status, loading, error }: Props) {
   if (error) {
     return (
@@ -19,26 +25,22 @@ export default function StatusStrip({ status, loading, error }: Props) {
   }
 
   const run = status?.latest_run;
-  const observedAll = run?.rows_found ?? null;
-  const inserted = status?.source_observations_count ?? null;
-  // Price coverage approximation: latest run's observations vs total observations.
-  // Without per-vendor breakdown here we lean on /api/passmark/vendor-summary
-  // for a precise number; this strip just surfaces totals.
-  const tracked = run?.tracked_skus_matched != null && run?.tracked_skus_missing != null
-    ? run.tracked_skus_matched + run.tracked_skus_missing
-    : null;
-  const matched = run?.tracked_skus_matched ?? null;
-  const missing = run?.tracked_skus_missing ?? null;
+  const rowsThisScrape = run?.rows_found ?? null;
+  const totalStored = status?.source_observations_count ?? null;
+  // "Scrapes on record" lets the user spot whether they're looking at 2 days
+  // of history vs 90, without needing to do arithmetic on the two row counts.
+  const totalScrapes =
+    rowsThisScrape != null && totalStored != null && rowsThisScrape > 0
+      ? Math.round(totalStored / rowsThisScrape)
+      : null;
 
   return (
     <div className="status-strip">
       <div className="status-strip__inner">
         <Pair label="Last scrape" value={loading ? '…' : fmtDateTime(status?.last_scraped_at)} />
-        <Pair label="Full CPU rows observed" value={loading ? '…' : fmtInt(observedAll)} />
-        <Pair label="Source observations stored" value={loading ? '…' : fmtInt(inserted)} />
-        <Pair label="Price history rows" value={loading ? '…' : fmtInt(status?.price_history_count)} />
-        <Pair label="Tracked SKUs matched" value={loading ? '…' : `${fmtInt(matched)} / ${fmtInt(tracked)}`} />
-        <Pair label="Tracked SKUs missing" value={loading ? '…' : fmtInt(missing)} />
+        <Pair label="Rows this scrape" value={loading ? '…' : fmtInt(rowsThisScrape)} />
+        <Pair label="Total rows on record" value={loading ? '…' : fmtInt(totalStored)} />
+        <Pair label="Scrapes on record" value={loading ? '…' : fmtInt(totalScrapes)} />
       </div>
     </div>
   );

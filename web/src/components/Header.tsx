@@ -4,23 +4,18 @@ import { fmtRelative } from '../format';
 interface Props {
   status: StatusData | null;
   onRefresh: () => void;
-  onDownload: () => void;
+  onDownloadXlsx: () => void;
+  xlsxBusy: boolean;
 }
 
-export default function Header({ status, onRefresh, onDownload }: Props) {
+export default function Header({ status, onRefresh, onDownloadXlsx, xlsxBusy }: Props) {
   const fresh = status?.is_fresh_daily ?? false;
   const ago = fmtRelative(status?.last_scraped_at);
 
   return (
     <header className="app-header">
       <div className="app-header__row">
-        <div>
-          <h1 className="app-header__title">CPU Pricing &amp; Supply-Tightness Tracker</h1>
-          <p className="app-header__subtitle">
-            Daily PassMark CPU universe capture with tracked Intel/AMD SKU basket. Direct vendor pricing
-            sources (Newegg, CDW, Provantage, Arrow) coming next.
-          </p>
-        </div>
+        <h1 className="app-header__title">CPU Pricing &amp; Supply-Tightness Tracker</h1>
         <div className="app-header__controls">
           {status && (
             <span className={`badge ${fresh ? 'badge--fresh' : 'badge--stale'}`} title={`Last scrape ${ago}`}>
@@ -29,16 +24,14 @@ export default function Header({ status, onRefresh, onDownload }: Props) {
             </span>
           )}
           <button className="btn" onClick={onRefresh} type="button">Refresh</button>
-          <button className="btn btn--primary" onClick={onDownload} type="button">Download CSV</button>
           <button
-            className="btn"
+            className="btn btn--primary"
+            onClick={onDownloadXlsx}
             type="button"
-            disabled
-            aria-disabled="true"
-            title="XLSX export coming soon — use CSV for now"
+            disabled={xlsxBusy}
+            title="Export every CPU + Δ columns + historical baselines as .xlsx"
           >
-            Download XLSX
-            <span className="btn__soon">Soon</span>
+            {xlsxBusy ? 'Generating…' : 'Download XLSX'}
           </button>
         </div>
       </div>

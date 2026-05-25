@@ -31,15 +31,5 @@ export function inferVendor(name: string): InferredVendor {
   return 'Other';
 }
 
-/**
- * Segment inference (Desktop / Laptop / Server / Mobile).
- *
- * Intentionally a no-op today per the customer brief: nullable, not
- * over-engineered. A null is the explicit "unknown" marker so we can backfill
- * with a smarter classifier (suffix-based heuristics on K/KF/H/HX/U, Xeon /
- * EPYC / Threadripper detection, Apple A-series vs M-series, etc.) without
- * a schema change.
- */
-export function inferSegment(_name: string): string | null {
-  return null;
-}
+// Segment inference (Server / Desktop / Laptop / Other) moved to ./segment.ts
+// once it stopped being a stub. Import from there.

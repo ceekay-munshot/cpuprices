@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { inferSegment, inferVendor } from './vendor';
+import { inferVendor } from './vendor';
 
 describe('inferVendor', () => {
   it('classifies Intel desktop and workstation chips', () => {
@@ -54,10 +54,4 @@ describe('inferVendor', () => {
   });
 });
 
-describe('inferSegment', () => {
-  it('returns null for now (deliberate placeholder)', () => {
-    assert.equal(inferSegment('Intel Core Ultra 9 285K'), null);
-    assert.equal(inferSegment('AMD EPYC 9554'), null);
-    assert.equal(inferSegment('Apple M1'), null);
-  });
-});
+// inferSegment tests moved to ./segment.test.ts

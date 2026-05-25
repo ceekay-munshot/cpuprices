@@ -350,6 +350,14 @@ table.t {
   padding: 5px 8px;
 }
 
+/* Tables whose rows open a drawer / details panel on click. */
+.t--clickable tbody tr {
+  cursor: pointer;
+}
+.t--clickable tbody tr:hover td {
+  background: #f1ead0;
+}
+
 .t .num { font-family: var(--font-mono); text-align: right; }
 .t .mono { font-family: var(--font-mono); }
 .t .muted { color: var(--text-muted); }
@@ -385,6 +393,24 @@ table.t {
 .quality-pill.proxy { color: #8a6d1a; background: #fbf3d8; border-color: #e8d28a; }
 .quality-pill.missing { color: #98655a; background: #f8e9e4; border-color: #d4ada4; }
 .quality-pill.pending { color: #4d5c8b; background: #e6ecfb; border-color: #b3c1e8; }
+
+/* Segment chips inside Universe table rows. Distinct hues so the eye can
+ * sort Server vs Desktop vs Laptop at a glance without reading the column. */
+.segment-pill {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: rgba(255, 255, 255, 0.5);
+}
+.segment-pill--server  { color: #6b3a14; background: #faecd2; border-color: #d9b88c; }
+.segment-pill--desktop { color: #2c5b2a; background: #e3f0d8; border-color: #a8c994; }
+.segment-pill--laptop  { color: #3b4d8a; background: #e3e9f7; border-color: #a4b3da; }
+.segment-pill--other   { color: #6b6557; background: #efeada; border-color: #c8bea4; }
 
 /* ---------- filters ---------- */
 
@@ -456,6 +482,54 @@ table.t {
   background: #fff3d4; border: 1px solid #e8c875; color: #6c5310;
   padding: 10px; border-radius: var(--radius-sm); font-size: var(--fs-xs);
 }
+.drawer__note {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* "Show me the math" block inside the Δ section of UniverseDrawer */
+.delta-explain {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+.delta-explain__label {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+.delta-explain__line {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: var(--fs-xs);
+  margin-top: 2px;
+}
+.delta-explain__tag {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  font-size: 10px;
+}
+.delta-explain__line code {
+  background: transparent;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+}
+.delta-explain__result {
+  font-weight: 700;
+  font-size: var(--fs-sm) !important;
+}
 
 /* ---------- caveat / banner ---------- */
 
@@ -491,4 +565,23 @@ table.t {
   border-top: 1px solid var(--border-thin);
   color: var(--text-secondary);
   font-size: var(--fs-xs);
+}
+
+/* ---------- infinite-scroll (Full Universe) ---------- */
+
+/* Tiny invisible div used as IntersectionObserver target. Height = 1px so it
+ * doesn't add visible spacing, but enters the viewport before the user hits
+ * the absolute end of the rendered rows. */
+.infinite-sentinel {
+  height: 1px;
+}
+
+.infinite-status {
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border-thin);
+  background: var(--bg-card-soft);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  text-align: center;
 }

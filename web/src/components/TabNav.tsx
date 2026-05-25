@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 
-export type Tab = 'tracker' | 'basket' | 'methodology';
+export type Tab = 'overview' | 'universe' | 'methodology';
 
 interface Props {
   tab: Tab;
   onChange: (next: Tab) => void;
-  basketCount: number | null;
+  universeCount: number | null;
 }
 
 interface TabSpec {
@@ -14,10 +14,10 @@ interface TabSpec {
   count?: number | null;
 }
 
-export default function TabNav({ tab, onChange, basketCount }: Props) {
+export default function TabNav({ tab, onChange, universeCount }: Props) {
   const tabs: TabSpec[] = [
-    { id: 'tracker',     label: 'Pricing Tracker' },
-    { id: 'basket',      label: 'Tracked SKUs', count: basketCount },
+    { id: 'overview',    label: 'Overview' },
+    { id: 'universe',    label: 'CPU Universe', count: universeCount },
     { id: 'methodology', label: 'Methodology' },
   ];
 

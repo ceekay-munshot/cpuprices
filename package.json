@@ -13,7 +13,7 @@
     "build": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p functions/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "verify:api": "bash scripts/verify-api.sh",
-    "test": "node --import tsx --test src/shared/money.test.ts src/shared/normalize.test.ts src/shared/vendor.test.ts",
+    "test": "node --import tsx --test src/shared/money.test.ts src/shared/normalize.test.ts src/shared/vendor.test.ts src/shared/segment.test.ts",
     "scrape": "tsx src/scraper/run.ts",
     "scrape:dry": "tsx src/scraper/run.ts --dry-run",
     "scrape:verify:intel": "tsx scripts/verify-intel.ts",
@@ -25,6 +25,8 @@
     "query:remote:status": "tsx scripts/query-remote-status.ts",
     "sync:local": "tsx scripts/sync-config.ts --local",
     "sync:remote": "tsx scripts/sync-config.ts --remote",
+    "backfill:segment:local": "tsx scripts/backfill-segment.ts --local",
+    "backfill:segment:remote": "tsx scripts/backfill-segment.ts --remote",
     "migrate:local": "wrangler d1 migrations apply cpuprices --local",
     "migrate:remote": "wrangler d1 migrations apply cpuprices --remote",
     "query": "tsx scripts/query.ts"
@@ -33,7 +35,8 @@
     "chart.js": "^4.4.4",
     "react": "^18.3.1",
     "react-chartjs-2": "^5.2.0",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241022.0",

@@ -14,7 +14,8 @@
 import type { Browser } from 'playwright';
 import type { Logger, TrackedSku } from '../shared/types';
 import { normalizeCpuName } from '../shared/normalize';
-import { inferSegment, inferVendor } from '../shared/vendor';
+import { inferSegment } from '../shared/segment';
+import { inferVendor } from '../shared/vendor';
 import { scrapeAllRows, type CpubenchmarkRow } from '../sources/cpubenchmark';
 import {
   sqlString,
