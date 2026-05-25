@@ -1,7 +1,11 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { api, type ObservationRow } from '../api';
 import { useApi } from '../useApi';
 import { deltaTone, fmtAbsCents, fmtInt, fmtPercent, fmtPrice } from '../format';
+import OverviewDrawer, {
+  type OverviewMetric,
+  type OverviewSelection,
+} from './OverviewDrawer';
 
 /**
  * Overview tab — answers "how are average server / laptop / desktop CPU prices
@@ -11,6 +15,9 @@ import { deltaTone, fmtAbsCents, fmtInt, fmtPercent, fmtPrice } from '../format'
  * only contributes to a delta if it has both a current and historical price).
  * This holds the comparison cohort constant — a new chip being added doesn't
  * shift the average artificially.
+ *
+ * Every numeric cell is clickable; clicking opens an OverviewDrawer with the
+ * formula, inputs, and every SKU that fed the number.
  */
 
 const SEGMENTS = ['Server', 'Laptop', 'Desktop'] as const;
@@ -82,6 +89,19 @@ export default function Overview() {
 
   const buckets = useMemo(() => (data ? aggregate(data.rows) : []), [data]);
 
+  const [selection, setSelection] = useState<OverviewSelection | null>(null);
+
+  const selectCell = useCallback(
+    (segment: Segment, manufacturer: Manufacturer, metric: OverviewMetric) => {
+      if (!data) return;
+      const rows = data.rows.filter(
+        (r) => r.segment_inferred === segment && r.vendor_inferred === manufacturer,
+      );
+      setSelection({ segment, manufacturer, metric, rows });
+    },
+    [data],
+  );
+
   return (
     <section className="section">
       <div className="section__head">
@@ -95,47 +115,64 @@ export default function Overview() {
       {error && <div className="state-line state-line--error">API error: {error}</div>}
 
       {!loading && !error && data && (
-        <div className="t-wrap">
-          <table className="t">
-            <thead>
-              <tr>
-                <th>Segment</th>
-                <th>Manufacturer</th>
-                <th className="num">Latest Avg Price</th>
-                <th className="num">WoW Avg Δ</th>
-                <th className="num">MoM Avg Δ</th>
-                <th className="num">QoQ Avg Δ</th>
-                <th className="num">SKUs Tracked</th>
-              </tr>
-            </thead>
-            <tbody>
-              {buckets.map((b) => (
-                <tr key={`${b.segment}-${b.manufacturer}`}>
-                  <td>
-                    <span className={`segment-pill segment-pill--${b.segment.toLowerCase()}`}>
-                      {b.segment}
-                    </span>
-                  </td>
-                  <td><strong>{b.manufacturer}</strong></td>
-                  <td className="num mono">{fmtPrice(b.latestAvgCents)}</td>
-                  <DeltaCell delta={b.wow} />
-                  <DeltaCell delta={b.mom} />
-                  <DeltaCell delta={b.qoq} />
-                  <td className="num mono">{fmtInt(b.skusTracked)}</td>
+        <>
+          <div className="t-wrap">
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Segment</th>
+                  <th>Manufacturer</th>
+                  <th className="num">Latest Avg Price</th>
+                  <th className="num">WoW Avg Δ</th>
+                  <th className="num">MoM Avg Δ</th>
+                  <th className="num">QoQ Avg Δ</th>
+                  <th className="num">SKUs Tracked</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {buckets.map((b) => (
+                  <tr key={`${b.segment}-${b.manufacturer}`}>
+                    <td>
+                      <span className={`segment-pill segment-pill--${b.segment.toLowerCase()}`}>
+                        {b.segment}
+                      </span>
+                    </td>
+                    <td><strong>{b.manufacturer}</strong></td>
+                    <td
+                      className="num mono cell-clickable"
+                      onClick={() => selectCell(b.segment, b.manufacturer, 'latest')}
+                      title="Show the math"
+                    >
+                      {fmtPrice(b.latestAvgCents)}
+                    </td>
+                    <DeltaCell delta={b.wow} onClick={() => selectCell(b.segment, b.manufacturer, 'wow')} />
+                    <DeltaCell delta={b.mom} onClick={() => selectCell(b.segment, b.manufacturer, 'mom')} />
+                    <DeltaCell delta={b.qoq} onClick={() => selectCell(b.segment, b.manufacturer, 'qoq')} />
+                    <td
+                      className="num mono cell-clickable"
+                      onClick={() => selectCell(b.segment, b.manufacturer, 'skus')}
+                      title="Show the math"
+                    >
+                      {fmtInt(b.skusTracked)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="history-note">Click any numeric cell to see the math behind it.</div>
+        </>
       )}
+
+      <OverviewDrawer selection={selection} onClose={() => setSelection(null)} />
     </section>
   );
 }
 
-function DeltaCell({ delta }: { delta: DeltaAgg }) {
+function DeltaCell({ delta, onClick }: { delta: DeltaAgg; onClick: () => void }) {
   const tone = deltaTone(delta.absCents);
   return (
-    <td className={`num mono delta ${tone}`}>
+    <td className={`num mono delta cell-clickable ${tone}`} onClick={onClick} title="Show the math">
       <div>{fmtAbsCents(delta.absCents)}</div>
       <div style={{ fontSize: 'var(--fs-xs)', opacity: 0.85 }}>{fmtPercent(delta.pct)}</div>
     </td>
