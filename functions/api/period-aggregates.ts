@@ -79,22 +79,27 @@ function isoQuarter(dateIso: string): { id: string; start: string } {
 
 /**
  * Pretty label for the UI ("W22-26", "Apr-26", "Q2-26").
+ *
+ * `split()` returns `string | undefined` under noUncheckedIndexedAccess, so we
+ * destructure with empty-string defaults — periodId is always well-formed in
+ * practice but this keeps the type checker happy without runtime branching.
  */
 function formatLabel(periodId: string, granularity: 'weekly' | 'monthly' | 'quarterly'): string {
   if (granularity === 'weekly') {
     // periodId like "2026-W22"  -> "W22-26"
-    const [yyyy, wnn] = periodId.split('-W');
+    const [yyyy = '', wnn = ''] = periodId.split('-W');
     return `W${wnn}-${yyyy.slice(2)}`;
   }
   if (granularity === 'monthly') {
     // periodId like "2026-05" -> "May-26"
-    const [yyyy, mm] = periodId.split('-');
+    const [yyyy = '', mm = '01'] = periodId.split('-');
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const name = monthNames[Math.max(0, Math.min(11, parseInt(mm, 10) - 1))];
+    const idx = Math.max(0, Math.min(11, parseInt(mm, 10) - 1));
+    const name = monthNames[idx] ?? '???';
     return `${name}-${yyyy.slice(2)}`;
   }
   // quarterly: "2026-Q2" -> "Q2-26"
-  const [yyyy, q] = periodId.split('-');
+  const [yyyy = '', q = ''] = periodId.split('-');
   return `${q}-${yyyy.slice(2)}`;
 }
 
