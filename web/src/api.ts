@@ -171,6 +171,30 @@ export interface ObservationsData {
   rows: ObservationRow[];
 }
 
+export interface PeriodBucket {
+  segment: string;
+  manufacturer: string;
+  avg_price_cents: number | null;
+  sku_count: number;
+}
+
+export interface PeriodAgg {
+  period_id: string;
+  period_label: string;
+  period_start: string;
+  scrape_run_count: number;
+  last_scrape_run_id: number;
+  last_scraped_at: string;
+  buckets: PeriodBucket[];
+}
+
+export interface PeriodAggregatesData {
+  source_note: string;
+  weekly:    PeriodAgg[];
+  monthly:   PeriodAgg[];
+  quarterly: PeriodAgg[];
+}
+
 export const api = {
   status: () => call<StatusData>('/api/status'),
   vendorSummary: () => call<VendorSummaryData>('/api/passmark/vendor-summary'),
@@ -178,4 +202,5 @@ export const api = {
   skuHistory: (id: number) => call<SkuHistoryData>(`/api/sku-history?sku_id=${id}`),
   priceChanges: () => call<PriceChangesData>('/api/price-changes'),
   observations: () => call<ObservationsData>('/api/observations'),
+  periodAggregates: () => call<PeriodAggregatesData>('/api/period-aggregates'),
 };
