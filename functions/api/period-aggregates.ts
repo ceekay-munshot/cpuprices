@@ -77,25 +77,55 @@ function isoQuarter(dateIso: string): { id: string; start: string } {
   return { id: `${year}-Q${q}`, start };
 }
 
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
 /**
- * Pretty label for the UI ("W22-26", "Apr-26", "Q2-26").
+ * Monday-Sunday range that contains the given timestamp, formatted like
+ * "May 18-24" within a single month or "Apr 27-May 3" when the week
+ * straddles a month boundary.
+ */
+function weekRangeLabel(timestampIso: string): string {
+  const d = new Date(timestampIso);
+  if (Number.isNaN(d.getTime())) return '—';
+  // getUTCDay: 0=Sun, 1=Mon, ..., 6=Sat. Days back to Monday:
+  const daysFromMonday = (d.getUTCDay() + 6) % 7;
+  const monday = new Date(d);
+  monday.setUTCDate(d.getUTCDate() - daysFromMonday);
+  monday.setUTCHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  const mMonth = MONTH_NAMES[monday.getUTCMonth()] ?? '???';
+  const sMonth = MONTH_NAMES[sunday.getUTCMonth()] ?? '???';
+  const mDay = monday.getUTCDate();
+  const sDay = sunday.getUTCDate();
+  return monday.getUTCMonth() === sunday.getUTCMonth()
+    ? `${mMonth} ${mDay}-${sDay}`
+    : `${mMonth} ${mDay}-${sMonth} ${sDay}`;
+}
+
+/**
+ * Pretty label for the UI.
+ *   weekly    → "May 18-24"  or  "Apr 27-May 3"
+ *   monthly   → "May-26"
+ *   quarterly → "Q2-26"
  *
  * `split()` returns `string | undefined` under noUncheckedIndexedAccess, so we
  * destructure with empty-string defaults — periodId is always well-formed in
  * practice but this keeps the type checker happy without runtime branching.
  */
-function formatLabel(periodId: string, granularity: 'weekly' | 'monthly' | 'quarterly'): string {
+function formatLabel(
+  periodId: string,
+  granularity: 'weekly' | 'monthly' | 'quarterly',
+  referenceTimestamp: string,
+): string {
   if (granularity === 'weekly') {
-    // periodId like "2026-W22"  -> "W22-26"
-    const [yyyy = '', wnn = ''] = periodId.split('-W');
-    return `W${wnn}-${yyyy.slice(2)}`;
+    return weekRangeLabel(referenceTimestamp);
   }
   if (granularity === 'monthly') {
     // periodId like "2026-05" -> "May-26"
     const [yyyy = '', mm = '01'] = periodId.split('-');
-    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const idx = Math.max(0, Math.min(11, parseInt(mm, 10) - 1));
-    const name = monthNames[idx] ?? '???';
+    const name = MONTH_NAMES[idx] ?? '???';
     return `${name}-${yyyy.slice(2)}`;
   }
   // quarterly: "2026-Q2" -> "Q2-26"
@@ -262,7 +292,7 @@ async function loadGranularity(
     }
     return {
       period_id: m.period_id,
-      period_label: formatLabel(m.period_id, granularity),
+      period_label: formatLabel(m.period_id, granularity, m.period_start),
       period_start: m.period_start,
       scrape_run_count: m.scrape_run_count,
       last_scrape_run_id: m.last_scrape_run_id,

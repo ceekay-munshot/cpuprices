@@ -28,16 +28,17 @@ interface GranularitySpec {
   id: Granularity;
   label: string;
   live: string;
-  abbrev: string;
+  abbrev: string;        // "WoW" — used in copy ("WoW % movement")
+  liveAbbrev: string;    // "WTD" — used as the live-row prefix
   priorNote: string;
 }
 
 const GRANULARITIES: GranularitySpec[] = [
-  { id: 'weekly',    label: 'Week on Week',       live: 'WTD live', abbrev: 'WoW',
+  { id: 'weekly',    label: 'Week on Week',       live: 'WTD live', abbrev: 'WoW', liveAbbrev: 'WTD',
     priorNote: 'vs prior ISO week' },
-  { id: 'monthly',   label: 'Month on Month',     live: 'MTD live', abbrev: 'MoM',
+  { id: 'monthly',   label: 'Month on Month',     live: 'MTD live', abbrev: 'MoM', liveAbbrev: 'MTD',
     priorNote: 'vs prior calendar month' },
-  { id: 'quarterly', label: 'Quarter on Quarter', live: 'QTD live', abbrev: 'QoQ',
+  { id: 'quarterly', label: 'Quarter on Quarter', live: 'QTD live', abbrev: 'QoQ', liveAbbrev: 'QTD',
     priorNote: 'vs prior calendar quarter' },
 ];
 
@@ -171,8 +172,7 @@ export default function Overview() {
                   return (
                     <tr key={p.period_id} className={isLive ? 'row--live' : undefined}>
                       <td>
-                        {isLive ? '★ ' : ''}
-                        {isLive ? `${activeSpec.abbrev.toUpperCase().slice(0,3)} · ` : ''}
+                        {isLive && <>★ {activeSpec.liveAbbrev} · </>}
                         <strong>{p.period_label}</strong>
                         {isLive && <span className="muted" style={{ marginLeft: 6 }}>live</span>}
                       </td>
