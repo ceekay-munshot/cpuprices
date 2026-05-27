@@ -202,16 +202,23 @@ async function loadGranularity(
         : `strftime('%Y-%m', scraped_at)`; // quarterly: aggregate by month first, then collapse in TS
 
   // Step 1: which scrape_run is the last one in each period?
-  // We pick the highest scrape_run_id whose scraped_at falls in the period.
+  // We pick the highest scrape_run_id whose scraped_at falls in the period,
+  // restricted to runs that actually finished successfully. A stuck or partial
+  // run (status='running' with finished_at=null, or status='failed') would
+  // otherwise silently become the period's "latest snapshot" and pollute the
+  // averages — observed in the wild as scrape_run #4 leaving the dashboard
+  // with 0 Server-Intel rows in its live period.
   const metaSql = `
     WITH per_run AS (
       SELECT
-        scrape_run_id,
-        ${periodExpr} AS period_id,
-        MIN(scraped_at) AS run_started_at,
-        MAX(scraped_at) AS run_ended_at
-      FROM source_observations
-      GROUP BY scrape_run_id, period_id
+        so.scrape_run_id,
+        ${periodExpr.replace(/scraped_at/g, 'so.scraped_at')} AS period_id,
+        MIN(so.scraped_at) AS run_started_at,
+        MAX(so.scraped_at) AS run_ended_at
+      FROM source_observations so
+      JOIN scrape_runs sr ON sr.id = so.scrape_run_id
+      WHERE sr.status = 'success'
+      GROUP BY so.scrape_run_id, period_id
     ),
     last_run_per_period AS (
       SELECT
