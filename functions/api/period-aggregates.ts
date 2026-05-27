@@ -153,11 +153,15 @@ function formatLabel(
   return `${q}-${yyyy.slice(2)}`;
 }
 
-export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
-  safeHandle(async () => {
-    const weekly    = await loadGranularity(env, 'weekly');
-    const monthly   = await loadGranularity(env, 'monthly');
-    const quarterly = await loadGranularity(env, 'quarterly');
+export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
+  const response = await safeHandle(async () => {
+    // Three independent granularity workloads — fan them out so D1 latency
+    // overlaps instead of stacking serially.
+    const [weekly, monthly, quarterly] = await Promise.all([
+      loadGranularity(env, 'weekly'),
+      loadGranularity(env, 'monthly'),
+      loadGranularity(env, 'quarterly'),
+    ]);
 
     const data: PeriodAggregatesData = {
       source_note: PASSMARK_NOTE,
@@ -167,6 +171,17 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
     };
     return data;
   });
+
+  // Underlying scrape refreshes once a day. Give the browser a tight window
+  // (so a manual Refresh always feels live within ~1 min) and let Cloudflare
+  // edges hold the response for 30 min with a 1-hr stale-while-revalidate
+  // window — repeat visits and other dashboard users get instant loads.
+  response.headers.set(
+    'Cache-Control',
+    'public, max-age=60, s-maxage=1800, stale-while-revalidate=3600',
+  );
+  return response;
+};
 
 async function loadGranularity(
   env: Env,
@@ -295,17 +310,22 @@ async function loadGranularity(
   // Step 3a: matched-cohort comparisons for each adjacent pair of periods.
   // For pair (metaRows[i], metaRows[i+1]) we restrict the averages to SKUs
   // present in BOTH scrapes (joined by normalized_source_name) so the % cell
-  // reflects price movement, not basket churn.
-  const matchedByPeriod = new Map<string, MatchedComparison[]>();
+  // reflects price movement, not basket churn. Each pair is an independent
+  // D1 round-trip, so fan them out in parallel.
+  const pairs: Array<{ periodId: string; cur: number; prior: number }> = [];
   for (let i = 0; i < metaRows.length - 1; i++) {
     const cur = metaRows[i];
     const prior = metaRows[i + 1];
     if (!cur || !prior) continue;
-    matchedByPeriod.set(
-      cur.period_id,
-      await matchedCohort(env, cur.last_scrape_run_id, prior.last_scrape_run_id),
-    );
+    pairs.push({ periodId: cur.period_id, cur: cur.last_scrape_run_id, prior: prior.last_scrape_run_id });
   }
+  const pairResults = await Promise.all(
+    pairs.map((p) => matchedCohort(env, p.cur, p.prior)),
+  );
+  const matchedByPeriod = new Map<string, MatchedComparison[]>();
+  pairs.forEach((p, idx) => {
+    matchedByPeriod.set(p.periodId, pairResults[idx] ?? []);
+  });
 
   return metaRows.map((m, i) => {
     const found = byRun.get(m.last_scrape_run_id) ?? [];
