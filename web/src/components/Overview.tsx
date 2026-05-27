@@ -169,21 +169,27 @@ export default function Overview() {
       {!loading && !error && data && (
         <>
           <div className="t-wrap">
-            <table className="t">
+            <table className="t t--overview">
+              <colgroup>
+                <col className="t--overview__col-period" />
+                <col /><col className="t--overview__col-seg-end" />
+                <col /><col className="t--overview__col-seg-end" />
+                <col /><col />
+              </colgroup>
               <thead>
-                <tr>
-                  <th rowSpan={2}>Period</th>
-                  <th className="num" colSpan={2}>Server</th>
-                  <th className="num" colSpan={2}>Laptop</th>
-                  <th className="num" colSpan={2}>Desktop</th>
+                <tr className="t--overview__group-row">
+                  <th rowSpan={2} className="t--overview__period-head">Period</th>
+                  <th colSpan={2}>Server</th>
+                  <th colSpan={2}>Laptop</th>
+                  <th colSpan={2}>Desktop</th>
                 </tr>
-                <tr>
-                  <th className="num">Intel</th>
-                  <th className="num">AMD</th>
-                  <th className="num">Intel</th>
-                  <th className="num">AMD</th>
-                  <th className="num">Intel</th>
-                  <th className="num">AMD</th>
+                <tr className="t--overview__sub-row">
+                  <th>Intel</th>
+                  <th className="t--overview__sub-end">AMD</th>
+                  <th>Intel</th>
+                  <th className="t--overview__sub-end">AMD</th>
+                  <th>Intel</th>
+                  <th>AMD</th>
                 </tr>
               </thead>
               <tbody>
@@ -192,19 +198,21 @@ export default function Overview() {
                   const isLive = i === 0;
                   return (
                     <tr key={p.period_id} className={isLive ? 'row--live' : undefined}>
-                      <td>
-                        {isLive && <>★ {activeSpec.liveAbbrev} · </>}
+                      <td className="t--overview__period-cell">
+                        {isLive && <span className="t--overview__live-tag">★ {activeSpec.liveAbbrev}</span>}
                         <strong>{p.period_label}</strong>
-                        {isLive && <span className="muted" style={{ marginLeft: 6 }}>live</span>}
+                        {isLive && <span className="muted t--overview__live-flag">live</span>}
                       </td>
-                      {SEGMENTS.flatMap((segment) =>
+                      {SEGMENTS.flatMap((segment, segIdx) =>
                         MANUFACTURERS.map((manufacturer) => {
                           const math = cellMath(p, prior, segment, manufacturer);
+                          const isSegEnd = manufacturer === 'AMD' && segIdx < SEGMENTS.length - 1;
                           return (
                             <PeriodCell
                               key={`${segment}-${manufacturer}`}
                               math={math}
                               isLive={isLive}
+                              isSegEnd={isSegEnd}
                               onClick={() => selectCell(i, segment, manufacturer)}
                             />
                           );
@@ -254,21 +262,24 @@ export default function Overview() {
 function PeriodCell({
   math,
   isLive,
+  isSegEnd,
   onClick,
 }: {
   math: CellMath;
   isLive: boolean;
+  isSegEnd: boolean;
   onClick: () => void;
 }) {
   const tone = deltaTone(math.pct);
   const showAbsoluteFallback = math.pct == null && math.curStandaloneAvg != null;
+  const cls = [
+    'num', 'mono', 'cell-clickable', 'delta', tone,
+    isLive    ? 'cell--live'                  : '',
+    isSegEnd  ? 't--overview__cell-seg-end'   : '',
+  ].filter(Boolean).join(' ');
 
   return (
-    <td
-      className={`num mono cell-clickable delta ${tone} ${isLive ? 'cell--live' : ''}`}
-      onClick={onClick}
-      title="Show the math"
-    >
+    <td className={cls} onClick={onClick} title="Show the math">
       {showAbsoluteFallback ? (
         <div className="muted">{fmtPrice(math.curStandaloneAvg)}</div>
       ) : (

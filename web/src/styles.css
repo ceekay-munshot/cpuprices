@@ -625,3 +625,118 @@ table.t {
   font-family: var(--font-mono);
   text-align: center;
 }
+
+/* ---------- Overview period-over-period grid ---------- *
+ * UBS Compare-style: two-tier header (segment / manufacturer) over a 6-col
+ * numeric body. Headers and values center on each column, subtle vertical
+ * separators delimit the three segment groups, period column carries the
+ * row label.
+ */
+.t.t--overview {
+  table-layout: fixed;
+}
+
+/* Column widths: period gets a comfortable left rail; the six metric columns
+ * share the remaining width evenly so every (segment, manufacturer) cell is
+ * the same size and headers center cleanly above them. */
+.t--overview__col-period { width: 220px; }
+
+/* Group header (Server / Laptop / Desktop) — row 1.
+ * Slightly larger, brand-uppercase, no bottom border so the segment block
+ * reads as a single header unit with the sub-row beneath it. */
+.t--overview thead tr.t--overview__group-row th {
+  text-align: center;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  background: var(--bg-table-head);
+  padding: 12px 14px 6px;
+  border-bottom: none;
+}
+
+/* Sub-header (Intel / AMD) — row 2.
+ * Smaller and slightly muted so the eye groups them under their segment
+ * parent rather than competing with it. */
+.t--overview thead tr.t--overview__sub-row th {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  color: var(--text-muted);
+  background: var(--bg-table-head);
+  padding: 4px 14px 10px;
+  border-top: none;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+/* Period column header keeps its left alignment + neutral weight. */
+.t--overview thead th.t--overview__period-head {
+  text-align: left;
+  vertical-align: middle;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--border-strong);
+  padding: 12px 14px;
+}
+
+/* Vertical separators between segment groups. Applied to the AMD column of
+ * Server and Laptop (the second manufacturer of each segment except the last)
+ * via both the colgroup hint and explicit cell classes for robust support. */
+.t--overview thead tr.t--overview__sub-row th.t--overview__sub-end {
+  border-right: 1px solid var(--border-strong);
+}
+.t--overview thead tr.t--overview__group-row th + th {
+  border-left: 1px solid var(--border-thin);
+}
+.t--overview tbody td.t--overview__cell-seg-end {
+  border-right: 1px solid var(--border-thin);
+}
+
+/* Body numeric cells: center the value under the header, use tabular-nums so
+ * digit widths line up across rows, and give the cell enough vertical room to
+ * feel like a financial dashboard rather than a dense spreadsheet. */
+.t--overview tbody td.num {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  padding: 12px 14px;
+  font-size: var(--fs-md);
+}
+
+/* Period (row label) cell: comfortable left padding, structured layout for
+ * the "★ WTD · May 25-31 live" composite. */
+.t--overview tbody td.t--overview__period-cell {
+  text-align: left;
+  padding: 12px 14px;
+  font-size: var(--fs-sm);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.t--overview tbody td.t--overview__period-cell strong {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.t--overview__live-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent-badge-warn);
+  background: rgba(168, 106, 24, 0.10);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.t--overview__live-flag {
+  font-size: 10px;
+  font-style: italic;
+  letter-spacing: 0.04em;
+}
+
+/* Live row tweaks specific to the new layout — keep the existing tint but
+ * align the period cell's flex content to baseline so the ★-tag, label, and
+ * "live" flag sit on the same line. */
+.t--overview tbody tr.row--live td.t--overview__period-cell {
+  background: #fbf6e6;
+}
