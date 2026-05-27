@@ -178,6 +178,14 @@ export interface PeriodBucket {
   sku_count: number;
 }
 
+export interface MatchedComparison {
+  segment: string;
+  manufacturer: string;
+  cohort_sku_count: number;
+  current_avg_cents: number | null;
+  prior_avg_cents:   number | null;
+}
+
 export interface PeriodAgg {
   period_id: string;
   period_label: string;
@@ -186,6 +194,8 @@ export interface PeriodAgg {
   last_scrape_run_id: number;
   last_scraped_at: string;
   buckets: PeriodBucket[];
+  /** null for the oldest period in the list (no prior to compare against). */
+  matched_vs_prior: MatchedComparison[] | null;
 }
 
 export interface PeriodAggregatesData {

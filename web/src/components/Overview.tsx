@@ -49,17 +49,29 @@ type Segment = (typeof SEGMENTS)[number];
 type Manufacturer = (typeof MANUFACTURERS)[number];
 
 interface CellMath {
-  cur:   number | null;
-  prior: number | null;
-  pct:   number | null;
-  curSkuCount: number;
-  priorSkuCount: number;
+  /** Standalone averages across each scrape's full bucket — context, not the % basis. */
+  curStandaloneAvg:   number | null;
+  priorStandaloneAvg: number | null;
+  curStandaloneCount:   number;
+  priorStandaloneCount: number;
+  /** Matched-cohort averages — same set of SKUs in both scrapes. The % is computed from these. */
+  curCohortAvg:   number | null;
+  priorCohortAvg: number | null;
+  cohortCount:    number;
+  pct: number | null;
 }
 
 function findBucket(p: PeriodAgg | null, segment: Segment, manufacturer: Manufacturer) {
   if (!p) return null;
   return p.buckets.find(
     (b) => b.segment === segment && b.manufacturer === manufacturer,
+  ) ?? null;
+}
+
+function findMatched(p: PeriodAgg | null, segment: Segment, manufacturer: Manufacturer) {
+  if (!p || !p.matched_vs_prior) return null;
+  return p.matched_vs_prior.find(
+    (m) => m.segment === segment && m.manufacturer === manufacturer,
   ) ?? null;
 }
 
@@ -71,18 +83,24 @@ function cellMath(
 ): CellMath {
   const curBucket   = findBucket(current, segment, manufacturer);
   const priorBucket = findBucket(prior,   segment, manufacturer);
-  const cur   = curBucket?.avg_price_cents   ?? null;
-  const priorPrice = priorBucket?.avg_price_cents ?? null;
+  const matched     = findMatched(current, segment, manufacturer);
+
+  const curCohortAvg   = matched?.current_avg_cents ?? null;
+  const priorCohortAvg = matched?.prior_avg_cents   ?? null;
   const pct =
-    cur == null || priorPrice == null || priorPrice === 0
+    curCohortAvg == null || priorCohortAvg == null || priorCohortAvg === 0
       ? null
-      : ((cur - priorPrice) / priorPrice) * 100;
+      : ((curCohortAvg - priorCohortAvg) / priorCohortAvg) * 100;
+
   return {
-    cur,
-    prior: priorPrice,
+    curStandaloneAvg:   curBucket?.avg_price_cents   ?? null,
+    priorStandaloneAvg: priorBucket?.avg_price_cents ?? null,
+    curStandaloneCount:   curBucket?.sku_count   ?? 0,
+    priorStandaloneCount: priorBucket?.sku_count ?? 0,
+    curCohortAvg,
+    priorCohortAvg,
+    cohortCount: matched?.cohort_sku_count ?? 0,
     pct,
-    curSkuCount:   curBucket?.sku_count   ?? 0,
-    priorSkuCount: priorBucket?.sku_count ?? 0,
   };
 }
 
@@ -101,14 +119,17 @@ export default function Overview() {
       if (!period) return;
       const math = cellMath(period, prior, segment, manufacturer);
       setSelection({
-        period:        { id: period.period_id,        label: period.period_label,        skuCount: math.curSkuCount,   avgPriceCents: math.cur },
-        priorPeriod:   prior ? { id: prior.period_id, label: prior.period_label,         skuCount: math.priorSkuCount, avgPriceCents: math.prior } : null,
+        period:        { id: period.period_id, label: period.period_label, skuCount: math.curStandaloneCount,   avgPriceCents: math.curStandaloneAvg },
+        priorPeriod:   prior ? { id: prior.period_id, label: prior.period_label, skuCount: math.priorStandaloneCount, avgPriceCents: math.priorStandaloneAvg } : null,
         segment,
         manufacturer,
         granularity:   activeSpec.abbrev,
         priorNote:     activeSpec.priorNote,
         pct:           math.pct,
         isLive:        periodIdx === 0,
+        cohortCount:   math.cohortCount,
+        curCohortAvgCents:   math.curCohortAvg,
+        priorCohortAvgCents: math.priorCohortAvg,
       });
     },
     [periods, activeSpec],
@@ -240,7 +261,7 @@ function PeriodCell({
   onClick: () => void;
 }) {
   const tone = deltaTone(math.pct);
-  const showAbsoluteFallback = math.pct == null && math.cur != null;
+  const showAbsoluteFallback = math.pct == null && math.curStandaloneAvg != null;
 
   return (
     <td
@@ -249,7 +270,7 @@ function PeriodCell({
       title="Show the math"
     >
       {showAbsoluteFallback ? (
-        <div className="muted">{fmtPrice(math.cur)}</div>
+        <div className="muted">{fmtPrice(math.curStandaloneAvg)}</div>
       ) : (
         <div>{fmtPercent(math.pct)}</div>
       )}

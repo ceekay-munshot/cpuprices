@@ -25,12 +25,18 @@ export interface OverviewSelection {
   priorNote: string;       // human-readable "vs prior ISO week" etc
   pct: number | null;
   isLive: boolean;
+  /** Matched-cohort numbers — what the % cell is actually computed from. */
+  cohortCount: number;
+  curCohortAvgCents:   number | null;
+  priorCohortAvgCents: number | null;
 }
 
 export interface PeriodSummary {
   id: string;
   label: string;
+  /** Total SKUs in the scrape's full bucket — NOT the cohort the % uses. */
   skuCount: number;
+  /** Standalone avg across all SKUs in the bucket — NOT the % basis. */
   avgPriceCents: number | null;
 }
 
@@ -53,10 +59,13 @@ export default function OverviewDrawer({ selection, onClose }: Props) {
 
   if (!selection) return null;
 
-  const { period, priorPeriod, segment, manufacturer, granularity, priorNote, pct, isLive } = selection;
+  const {
+    period, priorPeriod, segment, manufacturer, granularity, priorNote, pct, isLive,
+    cohortCount, curCohortAvgCents, priorCohortAvgCents,
+  } = selection;
   const absCents =
-    period.avgPriceCents != null && priorPeriod?.avgPriceCents != null
-      ? period.avgPriceCents - priorPeriod.avgPriceCents
+    curCohortAvgCents != null && priorCohortAvgCents != null
+      ? curCohortAvgCents - priorCohortAvgCents
       : null;
 
   const titleSuffix = priorPeriod
@@ -84,42 +93,66 @@ export default function OverviewDrawer({ selection, onClose }: Props) {
         </header>
 
         <div className="drawer__body">
-          {/* 1. Period endpoints */}
+          {/* 1. Snapshot context — full bucket counts/avgs per period, NOT the % basis. */}
           <section className="drawer__section">
-            <h4 className="drawer__section-title">Period endpoints</h4>
+            <h4 className="drawer__section-title">Snapshot context</h4>
             <dl className="drawer__kv">
               <dt>This period</dt>
               <dd>
-                {period.label} · avg {fmtPrice(period.avgPriceCents)} across {fmtInt(period.skuCount)} SKUs
+                {period.label} · {fmtInt(period.skuCount)} SKUs priced · standalone avg {fmtPrice(period.avgPriceCents)}
                 {isLive && <span className="muted"> · live</span>}
               </dd>
               <dt>Prior period</dt>
               <dd>
                 {priorPeriod
-                  ? `${priorPeriod.label} · avg ${fmtPrice(priorPeriod.avgPriceCents)} across ${fmtInt(priorPeriod.skuCount)} SKUs`
+                  ? `${priorPeriod.label} · ${fmtInt(priorPeriod.skuCount)} SKUs priced · standalone avg ${fmtPrice(priorPeriod.avgPriceCents)}`
                   : <span className="muted">— no prior period on record yet</span>}
               </dd>
             </dl>
             <p className="drawer__note">
-              Each period uses the last scrape that completed inside it. Buckets are recomputed
-              independently per period — when the SKU mix shifts (new chips listed, others delisted),
-              the cohort can change between the two endpoints.
+              Each period uses the last scrape that completed inside it. The SKU mix shifts between
+              scrapes (new chips listed, others delisted), so the two standalone averages above are
+              apples-to-oranges — they're shown for context only. The % cell uses a matched cohort
+              instead (next section).
             </p>
           </section>
 
-          {/* 2. Computation */}
+          {/* 2. Matched cohort — the like-for-like basket the % is actually computed from. */}
+          {priorPeriod && (
+            <section className="drawer__section">
+              <h4 className="drawer__section-title">Matched cohort · like-for-like basket</h4>
+              <dl className="drawer__kv">
+                <dt>Cohort</dt>
+                <dd>
+                  {fmtInt(cohortCount)} {segment.toLowerCase()} {manufacturer} SKUs priced in
+                  {' '}<strong>both</strong> {period.label} and {priorPeriod.label}
+                </dd>
+                <dt>Avg in {period.label}</dt>
+                <dd>{fmtPrice(curCohortAvgCents)} <span className="muted">(cohort-only)</span></dd>
+                <dt>Avg in {priorPeriod.label}</dt>
+                <dd>{fmtPrice(priorCohortAvgCents)} <span className="muted">(cohort-only)</span></dd>
+              </dl>
+              <p className="drawer__note">
+                Joined by normalized SKU name across the two scrapes. Restricting both averages to
+                the same basket strips out mix change — the only thing that moves the % is actual
+                price movement on the SKUs that appear in both endpoints.
+              </p>
+            </section>
+          )}
+
+          {/* 3. Computation — now on cohort numbers. */}
           <section className="drawer__section">
             <h4 className="drawer__section-title">Computation</h4>
 
             <div className="delta-explain">
-              <div className="delta-explain__label">Absolute Δ</div>
+              <div className="delta-explain__label">Absolute Δ (cohort)</div>
               <div className="delta-explain__line">
                 <span className="delta-explain__tag">formula</span>
-                <code>this.avg − prior.avg</code>
+                <code>cohort.this − cohort.prior</code>
               </div>
               <div className="delta-explain__line">
                 <span className="delta-explain__tag">inputs</span>
-                <code>{fmtPrice(period.avgPriceCents)} − {fmtPrice(priorPeriod?.avgPriceCents ?? null)}</code>
+                <code>{fmtPrice(curCohortAvgCents)} − {fmtPrice(priorCohortAvgCents)}</code>
               </div>
               <div className="delta-explain__line">
                 <span className="delta-explain__tag">result</span>
@@ -133,13 +166,13 @@ export default function OverviewDrawer({ selection, onClose }: Props) {
               <div className="delta-explain__label">% movement (what the cell shows)</div>
               <div className="delta-explain__line">
                 <span className="delta-explain__tag">formula</span>
-                <code>(this.avg − prior.avg) ÷ prior.avg × 100</code>
+                <code>(cohort.this − cohort.prior) ÷ cohort.prior × 100</code>
               </div>
               <div className="delta-explain__line">
                 <span className="delta-explain__tag">inputs</span>
                 <code>
-                  ({fmtPrice(period.avgPriceCents)} − {fmtPrice(priorPeriod?.avgPriceCents ?? null)})
-                  {' '}÷ {fmtPrice(priorPeriod?.avgPriceCents ?? null)} × 100
+                  ({fmtPrice(curCohortAvgCents)} − {fmtPrice(priorCohortAvgCents)})
+                  {' '}÷ {fmtPrice(priorCohortAvgCents)} × 100
                 </code>
               </div>
               <div className="delta-explain__line">
@@ -151,18 +184,20 @@ export default function OverviewDrawer({ selection, onClose }: Props) {
             </div>
           </section>
 
-          {/* 3. Why "—" if applicable */}
+          {/* 4. Why "—" if applicable */}
           {pct == null && (
             <section className="drawer__section">
               <h4 className="drawer__section-title">Why this cell shows &mdash;</h4>
               <p className="drawer__note">
                 {priorPeriod == null
                   ? `No observation falls into the prior ${granularity.toLowerCase()} period yet. History accumulates daily — the cell will populate once the daily cron writes a scrape into that window.`
-                  : period.avgPriceCents == null
-                    ? `No SKU in this (${segment}, ${manufacturer}) bucket had a current price in ${period.label}.`
-                    : priorPeriod.avgPriceCents == null
-                      ? `No SKU in this (${segment}, ${manufacturer}) bucket had a price in ${priorPeriod.label}.`
-                      : 'Prior period average is $0.00, which would divide by zero — guarded.'}
+                  : cohortCount === 0
+                    ? `No (${segment}, ${manufacturer}) SKU appears in BOTH ${period.label} and ${priorPeriod.label} — the matched cohort is empty, so the % comparison would be undefined.`
+                    : curCohortAvgCents == null
+                      ? `Cohort has ${fmtInt(cohortCount)} SKUs but none had a current price in ${period.label}.`
+                      : priorCohortAvgCents == null
+                        ? `Cohort has ${fmtInt(cohortCount)} SKUs but none had a price in ${priorPeriod.label}.`
+                        : 'Prior cohort average is $0.00, which would divide by zero — guarded.'}
               </p>
             </section>
           )}

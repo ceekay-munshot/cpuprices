@@ -44,6 +44,24 @@ interface BucketAgg {
   sku_count: number;
 }
 
+/**
+ * Matched-cohort comparison vs the immediately prior period in the list.
+ *
+ * `cohort_sku_count` is the size of the intersection of SKUs (joined by
+ * `normalized_source_name`) priced in BOTH scrapes — that's the basket the
+ * two averages are computed over. Without this, when the SKU mix shifts
+ * (chips listed/delisted between scrapes), the standalone period averages
+ * would compare apples-to-oranges and the % move would mostly reflect mix
+ * change, not actual price movement.
+ */
+interface MatchedComparison {
+  segment: string;
+  manufacturer: string;
+  cohort_sku_count: number;
+  current_avg_cents: number | null;
+  prior_avg_cents:   number | null;
+}
+
 interface PeriodAgg {
   period_id: string;
   period_label: string;
@@ -52,6 +70,8 @@ interface PeriodAgg {
   last_scrape_run_id: number;
   last_scraped_at: string;
   buckets: BucketAgg[];
+  /** null for the oldest period in the list (no prior to compare against). */
+  matched_vs_prior: MatchedComparison[] | null;
 }
 
 interface PeriodAggregatesData {
@@ -272,7 +292,22 @@ async function loadGranularity(
     });
   }
 
-  return metaRows.map((m) => {
+  // Step 3a: matched-cohort comparisons for each adjacent pair of periods.
+  // For pair (metaRows[i], metaRows[i+1]) we restrict the averages to SKUs
+  // present in BOTH scrapes (joined by normalized_source_name) so the % cell
+  // reflects price movement, not basket churn.
+  const matchedByPeriod = new Map<string, MatchedComparison[]>();
+  for (let i = 0; i < metaRows.length - 1; i++) {
+    const cur = metaRows[i];
+    const prior = metaRows[i + 1];
+    if (!cur || !prior) continue;
+    matchedByPeriod.set(
+      cur.period_id,
+      await matchedCohort(env, cur.last_scrape_run_id, prior.last_scrape_run_id),
+    );
+  }
+
+  return metaRows.map((m, i) => {
     const found = byRun.get(m.last_scrape_run_id) ?? [];
     const buckets: BucketAgg[] = [];
     for (const segment of SEGMENTS) {
@@ -290,6 +325,7 @@ async function loadGranularity(
         );
       }
     }
+    const hasPrior = i < metaRows.length - 1;
     return {
       period_id: m.period_id,
       period_label: formatLabel(m.period_id, granularity, m.period_start),
@@ -298,8 +334,95 @@ async function loadGranularity(
       last_scrape_run_id: m.last_scrape_run_id,
       last_scraped_at: m.period_start,
       buckets,
+      matched_vs_prior: hasPrior
+        ? fillMatchedGrid(matchedByPeriod.get(m.period_id) ?? [])
+        : null,
     };
   });
+}
+
+/**
+ * Restrict each (segment, manufacturer) average to SKUs priced in BOTH
+ * scrapes — the intersection joined by normalized_source_name. Segment and
+ * manufacturer classification follow the current scrape; if a SKU was
+ * reclassified between the two scrapes (rare), it's bucketed under its
+ * current label, which is what the cell label promises.
+ *
+ * DISTINCT on the subqueries defends against the same SKU appearing twice
+ * in one scrape — shouldn't happen with the PassMark all-CPUs source but
+ * the schema doesn't enforce it, and a duplicate would inflate the COUNT
+ * and skew the AVG via a cartesian fan-out.
+ */
+async function matchedCohort(
+  env: Env,
+  currentRunId: number,
+  priorRunId:   number,
+): Promise<MatchedComparison[]> {
+  const sql = `
+    WITH current_obs AS (
+      SELECT normalized_source_name, segment_inferred, vendor_inferred,
+             AVG(CAST(price_cents AS REAL)) AS price
+      FROM source_observations
+      WHERE scrape_run_id = ?1
+        AND price_cents IS NOT NULL
+        AND segment_inferred IN ('Server','Laptop','Desktop')
+        AND vendor_inferred  IN ('Intel','AMD')
+      GROUP BY normalized_source_name, segment_inferred, vendor_inferred
+    ),
+    prior_obs AS (
+      SELECT normalized_source_name,
+             AVG(CAST(price_cents AS REAL)) AS price
+      FROM source_observations
+      WHERE scrape_run_id = ?2
+        AND price_cents IS NOT NULL
+      GROUP BY normalized_source_name
+    )
+    SELECT c.segment_inferred AS segment,
+           c.vendor_inferred  AS manufacturer,
+           COUNT(*)                AS cohort_sku_count,
+           AVG(c.price)            AS current_avg_cents,
+           AVG(p.price)            AS prior_avg_cents
+    FROM current_obs c
+    INNER JOIN prior_obs p
+      ON p.normalized_source_name = c.normalized_source_name
+    GROUP BY c.segment_inferred, c.vendor_inferred;
+  `;
+  const res = await env.DB.prepare(sql).bind(currentRunId, priorRunId).all<{
+    segment: string;
+    manufacturer: string;
+    cohort_sku_count: number;
+    current_avg_cents: number | null;
+    prior_avg_cents:   number | null;
+  }>();
+  return res.results.map((r) => ({
+    segment:           r.segment,
+    manufacturer:      r.manufacturer,
+    cohort_sku_count:  r.cohort_sku_count,
+    current_avg_cents: r.current_avg_cents,
+    prior_avg_cents:   r.prior_avg_cents,
+  }));
+}
+
+/** Ensure all 6 (segment × manufacturer) cells exist, missing → zero cohort. */
+function fillMatchedGrid(rows: MatchedComparison[]): MatchedComparison[] {
+  const out: MatchedComparison[] = [];
+  for (const segment of SEGMENTS) {
+    for (const manufacturer of MANUFACTURERS) {
+      const m = rows.find(
+        (r) => r.segment === segment && r.manufacturer === manufacturer,
+      );
+      out.push(
+        m ?? {
+          segment,
+          manufacturer,
+          cohort_sku_count: 0,
+          current_avg_cents: null,
+          prior_avg_cents:   null,
+        },
+      );
+    }
+  }
+  return out;
 }
 
 export const onRequest: PagesFunction<Env> = async (ctx) => {
@@ -310,4 +433,4 @@ export const onRequest: PagesFunction<Env> = async (ctx) => {
 };
 
 // Re-export for tests / TS consumers
-export type { PeriodAggregatesData, PeriodAgg, BucketAgg };
+export type { PeriodAggregatesData, PeriodAgg, BucketAgg, MatchedComparison };
