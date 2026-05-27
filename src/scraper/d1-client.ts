@@ -60,6 +60,14 @@ export function createLocalD1Executor(): D1Executor {
 
 const REMOTE_MAX_REQUEST_BYTES = 900_000; // conservative ceiling under D1's ~1MB per-request limit
 
+// Bounded retry for transient D1 errors (network blip, 5xx, 429). 3 total
+// attempts means worst-case 0 + 0.5 + 1.5 = 2s of backoff before surfacing.
+// Chosen to be tight enough that the 20-min GitHub Actions timeout still
+// has headroom across 12+ chunked inserts even if every chunk hits one
+// transient before succeeding.
+const REMOTE_MAX_ATTEMPTS = 3;
+const REMOTE_BACKOFF_MS = [500, 1500];
+
 interface CfApiSuccess {
   success: true;
   result: D1ResultBlock[];
@@ -73,6 +81,21 @@ interface CfApiFailure {
 
 type CfApiResponse = CfApiSuccess | CfApiFailure;
 
+/**
+ * Classifies an outcome as worth retrying. Conservative on purpose — we
+ * only retry the obviously-transient class so a malformed SQL doesn't
+ * burn the full backoff budget before surfacing.
+ *
+ *   - Network errors (fetch threw): always transient
+ *   - HTTP 429 / 5xx: transient (rate limit, gateway, upstream timeout)
+ *   - HTTP 4xx other: deterministic, do NOT retry
+ *   - Cloudflare API success=false: do NOT retry (SQL error, schema issue)
+ */
+type RemoteAttempt =
+  | { kind: 'ok'; result: D1ResultBlock[] }
+  | { kind: 'transient'; error: Error }
+  | { kind: 'fatal'; error: Error };
+
 export function createRemoteD1Executor(): D1Executor {
   loadDotEnvIfPresent();
   const apiToken = requireEnv('CLOUDFLARE_API_TOKEN');
@@ -81,14 +104,7 @@ export function createRemoteD1Executor(): D1Executor {
 
   const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`;
 
-  const post = async (sql: string): Promise<D1ResultBlock[]> => {
-    const bodyBytes = Buffer.byteLength(sql, 'utf-8');
-    if (bodyBytes > REMOTE_MAX_REQUEST_BYTES) {
-      throw new Error(
-        `D1 remote request body is ${bodyBytes.toLocaleString()} bytes; the pipeline should chunk before reaching this layer (cap ${REMOTE_MAX_REQUEST_BYTES.toLocaleString()}).`,
-      );
-    }
-
+  const attempt = async (sql: string): Promise<RemoteAttempt> => {
     let res: Response;
     try {
       res = await fetch(endpoint, {
@@ -103,25 +119,57 @@ export function createRemoteD1Executor(): D1Executor {
       // Network-level error (DNS, TCP, TLS). The error message from fetch
       // does not contain the token; safe to surface.
       const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`D1 remote: network error contacting Cloudflare API: ${msg}`);
+      return {
+        kind: 'transient',
+        error: new Error(`D1 remote: network error contacting Cloudflare API: ${msg}`),
+      };
     }
 
     if (!res.ok) {
-      // Read the body for context; truncate to keep error messages reasonable.
-      // Cloudflare error bodies do not echo the Authorization header.
       const text = await safeReadText(res);
-      throw new Error(
+      const err = new Error(
         `D1 remote: HTTP ${res.status} ${res.statusText} from Cloudflare API\n` +
           `body: ${truncate(text, 800)}`,
       );
+      const isTransient = res.status === 429 || res.status >= 500;
+      return { kind: isTransient ? 'transient' : 'fatal', error: err };
     }
 
     const body = (await res.json()) as CfApiResponse;
     if (!body.success) {
       const errs = body.errors?.map((e) => `[${e.code}] ${e.message}`).join('; ') ?? '(no error detail)';
-      throw new Error(`D1 remote: Cloudflare API returned success=false: ${errs}`);
+      // success:false is deterministic (bad SQL, schema violation, etc.) —
+      // retrying would just waste backoff time before surfacing the same error.
+      return {
+        kind: 'fatal',
+        error: new Error(`D1 remote: Cloudflare API returned success=false: ${errs}`),
+      };
     }
-    return body.result ?? [];
+    return { kind: 'ok', result: body.result ?? [] };
+  };
+
+  const post = async (sql: string): Promise<D1ResultBlock[]> => {
+    const bodyBytes = Buffer.byteLength(sql, 'utf-8');
+    if (bodyBytes > REMOTE_MAX_REQUEST_BYTES) {
+      throw new Error(
+        `D1 remote request body is ${bodyBytes.toLocaleString()} bytes; the pipeline should chunk before reaching this layer (cap ${REMOTE_MAX_REQUEST_BYTES.toLocaleString()}).`,
+      );
+    }
+
+    let lastError: Error | undefined;
+    for (let i = 0; i < REMOTE_MAX_ATTEMPTS; i++) {
+      const outcome = await attempt(sql);
+      if (outcome.kind === 'ok') return outcome.result;
+      if (outcome.kind === 'fatal') throw outcome.error;
+      lastError = outcome.error;
+      const backoff = REMOTE_BACKOFF_MS[i];
+      if (backoff != null) {
+        await new Promise((resolveTimer) => setTimeout(resolveTimer, backoff));
+      }
+    }
+    throw new Error(
+      `D1 remote: ${REMOTE_MAX_ATTEMPTS} transient attempts exhausted. Last error: ${lastError?.message ?? '(none)'}`,
+    );
   };
 
   return {

@@ -132,48 +132,57 @@ export async function scrapeVendorIntoD1(opts: VendorRunOptions): Promise<Vendor
     throw new Error('Failed to capture scrape_run id from INSERT...RETURNING.');
   }
 
-  const rowsFound = scraped.length;
-  const rowsInserted = matched.size;
-  const status: ScrapeRunStatus =
-    rowsInserted === tracked.length ? 'success' : rowsInserted > 0 ? 'partial' : 'failure';
-  const finishedAt = new Date().toISOString();
+  let afterCount: number;
+  let rowsFound: number;
+  let rowsInserted: number;
+  let status: ScrapeRunStatus;
+  try {
+    rowsFound = scraped.length;
+    rowsInserted = matched.size;
+    status =
+      rowsInserted === tracked.length ? 'success' : rowsInserted > 0 ? 'partial' : 'failure';
+    const finishedAt = new Date().toISOString();
 
-  const valueRows: string[] = [];
-  for (const sku of tracked) {
-    const m = matched.get(sku.name);
-    if (!m) continue;
-    const { row, skuId } = m;
-    valueRows.push(
-      `(${skuId}, ${sourceId}, ${scrapeRunId}, ` +
-        `${sqlString(row.sourceSkuName)}, ${sqlValue(row.priceCents)}, ${sqlValue(row.rawPriceText)}, ` +
-        `'USD', 'street', ${sqlValue(row.cpuMark)}, ${sqlValue(row.url)}, ${sqlString(row.scrapedAt)})`,
+    const valueRows: string[] = [];
+    for (const sku of tracked) {
+      const m = matched.get(sku.name);
+      if (!m) continue;
+      const { row, skuId } = m;
+      valueRows.push(
+        `(${skuId}, ${sourceId}, ${scrapeRunId}, ` +
+          `${sqlString(row.sourceSkuName)}, ${sqlValue(row.priceCents)}, ${sqlValue(row.rawPriceText)}, ` +
+          `'USD', 'street', ${sqlValue(row.cpuMark)}, ${sqlValue(row.url)}, ${sqlString(row.scrapedAt)})`,
+      );
+    }
+    const batchSql = [
+      'PRAGMA foreign_keys = ON;',
+      valueRows.length > 0
+        ? `INSERT INTO price_history (sku_id, source_id, scrape_run_id, source_sku_name, price_cents, raw_price_text, currency, price_type, benchmark_score, url, scraped_at) VALUES\n  ${valueRows.join(',\n  ')};`
+        : '-- no matched rows',
+      `UPDATE scrape_runs SET status = ${sqlString(status)}, finished_at = ${sqlString(finishedAt)}, rows_found = ${rowsFound}, rows_inserted = ${rowsInserted} WHERE id = ${scrapeRunId};`,
+    ].join('\n');
+    await executor.execBatch(batchSql);
+
+    // observations_inserted is 0 because the per-vendor debug scripts never
+    // write to source_observations.
+    await executor.execBatch(
+      'PRAGMA foreign_keys = ON;\n' +
+        `UPDATE scrape_runs SET ` +
+        `observations_inserted = 0, ` +
+        `price_history_inserted = ${rowsInserted}, ` +
+        `tracked_skus_matched = ${matched.size}, ` +
+        `tracked_skus_missing = ${missing.length} ` +
+        `WHERE id = ${scrapeRunId};`,
     );
+    logger.info(
+      `[${vendor}] scrape_run ${scrapeRunId} -> ${status}; inserted ${rowsInserted}/${tracked.length} (${executor.label})`,
+    );
+
+    afterCount = await getPriceHistoryCount(executor);
+  } catch (err) {
+    await markRunFailedBestEffort(executor, scrapeRunId, logger, `[${vendor}]`, err);
+    throw err;
   }
-  const batchSql = [
-    'PRAGMA foreign_keys = ON;',
-    valueRows.length > 0
-      ? `INSERT INTO price_history (sku_id, source_id, scrape_run_id, source_sku_name, price_cents, raw_price_text, currency, price_type, benchmark_score, url, scraped_at) VALUES\n  ${valueRows.join(',\n  ')};`
-      : '-- no matched rows',
-    `UPDATE scrape_runs SET status = ${sqlString(status)}, finished_at = ${sqlString(finishedAt)}, rows_found = ${rowsFound}, rows_inserted = ${rowsInserted} WHERE id = ${scrapeRunId};`,
-  ].join('\n');
-  await executor.execBatch(batchSql);
-
-  // observations_inserted is 0 because the per-vendor debug scripts never
-  // write to source_observations.
-  await executor.execBatch(
-    'PRAGMA foreign_keys = ON;\n' +
-      `UPDATE scrape_runs SET ` +
-      `observations_inserted = 0, ` +
-      `price_history_inserted = ${rowsInserted}, ` +
-      `tracked_skus_matched = ${matched.size}, ` +
-      `tracked_skus_missing = ${missing.length} ` +
-      `WHERE id = ${scrapeRunId};`,
-  );
-  logger.info(
-    `[${vendor}] scrape_run ${scrapeRunId} -> ${status}; inserted ${rowsInserted}/${tracked.length} (${executor.label})`,
-  );
-
-  const afterCount = await getPriceHistoryCount(executor);
 
   return {
     vendor,
@@ -325,77 +334,93 @@ export async function scrapeAllIntoD1(opts: {
     throw new Error('Failed to capture scrape_run id from INSERT...RETURNING.');
   }
 
-  const obsValues: string[] = [];
-  for (const row of scraped) {
-    const norm = normalizeCpuName(row.sourceSkuName);
-    const vendor = inferVendor(row.sourceSkuName);
-    const segment = inferSegment(row.sourceSkuName);
-    obsValues.push(
-      `(${sourceId}, ${scrapeRunId}, ` +
-        `${sqlString(row.sourceSkuName)}, ${sqlString(norm)}, ` +
-        `${sqlString(vendor)}, ${sqlValue(segment)}, ` +
-        `${sqlValue(row.cpuMark)}, ${sqlValue(row.rank)}, ${sqlValue(row.cpuValue)}, ` +
-        `${sqlValue(row.priceCents)}, ${sqlValue(row.rawPriceText)}, ` +
-        `'USD', ${sqlValue(row.url)}, ${sqlString(row.scrapedAt)})`,
-    );
-  }
+  // Everything after this opens the run row; any throw between here and the
+  // final UPDATE would leave the run as status='running' forever (observed in
+  // the wild as scrape_run #4: 6 chunks of 500 obs inserted, chunk 7 errored,
+  // run row never closed, dashboard treated the partial scrape as the latest
+  // snapshot). Wrap the work and best-effort-mark the run failed on throw.
+  let status: ScrapeRunStatus;
+  let rowsInsertedObs: number;
+  let rowsInsertedPh: number;
+  let afterObservations: number;
+  let afterPriceHistory: number;
+  let vendorAggregates: VendorAggregate[];
+  try {
+    const obsValues: string[] = [];
+    for (const row of scraped) {
+      const norm = normalizeCpuName(row.sourceSkuName);
+      const vendor = inferVendor(row.sourceSkuName);
+      const segment = inferSegment(row.sourceSkuName);
+      obsValues.push(
+        `(${sourceId}, ${scrapeRunId}, ` +
+          `${sqlString(row.sourceSkuName)}, ${sqlString(norm)}, ` +
+          `${sqlString(vendor)}, ${sqlValue(segment)}, ` +
+          `${sqlValue(row.cpuMark)}, ${sqlValue(row.rank)}, ${sqlValue(row.cpuValue)}, ` +
+          `${sqlValue(row.priceCents)}, ${sqlValue(row.rawPriceText)}, ` +
+          `'USD', ${sqlValue(row.url)}, ${sqlString(row.scrapedAt)})`,
+      );
+    }
 
-  for (let i = 0; i < obsValues.length; i += OBSERVATIONS_INSERT_CHUNK) {
-    const chunk = obsValues.slice(i, i + OBSERVATIONS_INSERT_CHUNK);
-    const sql = [
-      'PRAGMA foreign_keys = ON;',
-      `INSERT INTO source_observations (source_id, scrape_run_id, source_sku_name, normalized_source_name, vendor_inferred, segment_inferred, benchmark_score, rank, cpu_value, price_cents, raw_price_text, currency, url, scraped_at) VALUES\n  ${chunk.join(',\n  ')};`,
-    ].join('\n');
-    await executor.execBatch(sql);
-    logger.info(`[all/${executor.label}] observations inserted ${Math.min(i + OBSERVATIONS_INSERT_CHUNK, obsValues.length)}/${obsValues.length}`);
-  }
+    for (let i = 0; i < obsValues.length; i += OBSERVATIONS_INSERT_CHUNK) {
+      const chunk = obsValues.slice(i, i + OBSERVATIONS_INSERT_CHUNK);
+      const sql = [
+        'PRAGMA foreign_keys = ON;',
+        `INSERT INTO source_observations (source_id, scrape_run_id, source_sku_name, normalized_source_name, vendor_inferred, segment_inferred, benchmark_score, rank, cpu_value, price_cents, raw_price_text, currency, url, scraped_at) VALUES\n  ${chunk.join(',\n  ')};`,
+      ].join('\n');
+      await executor.execBatch(sql);
+      logger.info(`[all/${executor.label}] observations inserted ${Math.min(i + OBSERVATIONS_INSERT_CHUNK, obsValues.length)}/${obsValues.length}`);
+    }
 
-  const phValues: string[] = [];
-  for (const sku of trackedSkus) {
-    const m = matched.get(sku.name);
-    if (!m) continue;
-    const { row, skuId } = m;
-    phValues.push(
-      `(${skuId}, ${sourceId}, ${scrapeRunId}, ` +
-        `${sqlString(row.sourceSkuName)}, ${sqlValue(row.priceCents)}, ${sqlValue(row.rawPriceText)}, ` +
-        `'USD', 'street', ${sqlValue(row.cpuMark)}, ${sqlValue(row.url)}, ${sqlString(row.scrapedAt)})`,
-    );
-  }
-  if (phValues.length > 0) {
+    const phValues: string[] = [];
+    for (const sku of trackedSkus) {
+      const m = matched.get(sku.name);
+      if (!m) continue;
+      const { row, skuId } = m;
+      phValues.push(
+        `(${skuId}, ${sourceId}, ${scrapeRunId}, ` +
+          `${sqlString(row.sourceSkuName)}, ${sqlValue(row.priceCents)}, ${sqlValue(row.rawPriceText)}, ` +
+          `'USD', 'street', ${sqlValue(row.cpuMark)}, ${sqlValue(row.url)}, ${sqlString(row.scrapedAt)})`,
+      );
+    }
+    if (phValues.length > 0) {
+      await executor.execBatch(
+        'PRAGMA foreign_keys = ON;\n' +
+          `INSERT INTO price_history (sku_id, source_id, scrape_run_id, source_sku_name, price_cents, raw_price_text, currency, price_type, benchmark_score, url, scraped_at) VALUES\n  ${phValues.join(',\n  ')};`,
+      );
+    }
+
+    const finishedAt = new Date().toISOString();
+    rowsInsertedObs = obsValues.length;
+    rowsInsertedPh = phValues.length;
+    status =
+      rowsInsertedObs === rowsFound && rowsInsertedPh === trackedSkus.length
+        ? 'success'
+        : rowsInsertedObs > 0
+          ? 'partial'
+          : 'failure';
+
     await executor.execBatch(
       'PRAGMA foreign_keys = ON;\n' +
-        `INSERT INTO price_history (sku_id, source_id, scrape_run_id, source_sku_name, price_cents, raw_price_text, currency, price_type, benchmark_score, url, scraped_at) VALUES\n  ${phValues.join(',\n  ')};`,
+        `UPDATE scrape_runs SET ` +
+        `status = ${sqlString(status)}, ` +
+        `finished_at = ${sqlString(finishedAt)}, ` +
+        `rows_found = ${rowsFound}, ` +
+        `rows_inserted = ${rowsInsertedPh}, ` +
+        `observations_inserted = ${rowsInsertedObs}, ` +
+        `price_history_inserted = ${rowsInsertedPh}, ` +
+        `tracked_skus_matched = ${matched.size}, ` +
+        `tracked_skus_missing = ${trackedMissing.length} ` +
+        `WHERE id = ${scrapeRunId};`,
     );
+    logger.info(`[all/${executor.label}] scrape_run ${scrapeRunId} -> ${status}`);
+
+    afterObservations = await getSourceObservationsCount(executor);
+    afterPriceHistory = await getPriceHistoryCount(executor);
+    vendorAggregates = await computeVendorAggregatesFromDb(executor, scrapeRunId);
+  } catch (err) {
+    await markRunFailedBestEffort(executor, scrapeRunId, logger, `[all/${executor.label}]`, err);
+    throw err;
   }
-
-  const finishedAt = new Date().toISOString();
-  const rowsInsertedObs = obsValues.length;
-  const rowsInsertedPh = phValues.length;
-  const status: ScrapeRunStatus =
-    rowsInsertedObs === rowsFound && rowsInsertedPh === trackedSkus.length
-      ? 'success'
-      : rowsInsertedObs > 0
-        ? 'partial'
-        : 'failure';
-
-  await executor.execBatch(
-    'PRAGMA foreign_keys = ON;\n' +
-      `UPDATE scrape_runs SET ` +
-      `status = ${sqlString(status)}, ` +
-      `finished_at = ${sqlString(finishedAt)}, ` +
-      `rows_found = ${rowsFound}, ` +
-      `rows_inserted = ${rowsInsertedPh}, ` +
-      `observations_inserted = ${rowsInsertedObs}, ` +
-      `price_history_inserted = ${rowsInsertedPh}, ` +
-      `tracked_skus_matched = ${matched.size}, ` +
-      `tracked_skus_missing = ${trackedMissing.length} ` +
-      `WHERE id = ${scrapeRunId};`,
-  );
-  logger.info(`[all/${executor.label}] scrape_run ${scrapeRunId} -> ${status}`);
-
-  const afterObservations = await getSourceObservationsCount(executor);
-  const afterPriceHistory = await getPriceHistoryCount(executor);
-  const vendorAggregates = await computeVendorAggregatesFromDb(executor, scrapeRunId);
 
   return {
     dryRun: false,
@@ -418,6 +443,43 @@ export async function scrapeAllIntoD1(opts: {
 // ============================================================================
 // Helpers (count queries, vendor aggregation, table printer)
 // ============================================================================
+
+/**
+ * Best-effort marker that closes a partially-written scrape_run as 'failure'.
+ *
+ * Called from the catch arm of both pipelines. If this UPDATE itself throws
+ * (e.g. D1 is the thing that's down), we log and swallow — the operator's
+ * actionable error is the ORIGINAL one being re-thrown by the caller, and
+ * masking it with a secondary "couldn't even mark it failed" error would
+ * make on-call debugging worse, not better.
+ *
+ * Idempotent at the DB layer: the UPDATE is unconditional on status, so a
+ * second call is a no-op. Safe to call even if some earlier code already
+ * set status to a terminal value — the latest write wins.
+ */
+async function markRunFailedBestEffort(
+  executor: D1Executor,
+  scrapeRunId: number,
+  logger: Logger,
+  tag: string,
+  originalError: unknown,
+): Promise<void> {
+  const finishedAt = new Date().toISOString();
+  const msg = originalError instanceof Error ? originalError.message : String(originalError);
+  logger.error(
+    `${tag} scrape_run ${scrapeRunId} threw mid-execution; marking as 'failure'. cause: ${msg}`,
+  );
+  try {
+    await executor.execBatch(
+      `UPDATE scrape_runs SET status = 'failure', finished_at = ${sqlString(finishedAt)} WHERE id = ${scrapeRunId};`,
+    );
+  } catch (markErr) {
+    const markMsg = markErr instanceof Error ? markErr.message : String(markErr);
+    logger.error(
+      `${tag} could not mark scrape_run ${scrapeRunId} as failed (will leave as 'running'): ${markMsg}`,
+    );
+  }
+}
 
 export async function getPriceHistoryCount(executor: D1Executor): Promise<number> {
   return scalarNumber(await executor.exec('SELECT count(*) AS cnt FROM price_history;'), 'cnt') ?? 0;
