@@ -32,6 +32,11 @@ interface ObservationRow {
   currency: string;
   url: string | null;
   scraped_at: string;
+  // ISO timestamp of the SKU's earliest observation across ALL scrapes
+  // (joined by normalized_source_name). Powers the "new SKU" filter on the
+  // CPU Universe tab — the client computes "is new" by comparing this against
+  // a rolling 90-day cutoff.
+  first_seen_at: string | null;
   // Closest historical price (taken from the LATEST observation whose
   // scraped_at is on/before the cutoff). Null when no observation exists
   // that far back yet, OR when the CPU was added to the source after the
@@ -57,15 +62,21 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
       };
     }
 
-    // For each row in the latest scrape, look up the closest historical
-    // price at 7 / 30 / 90 days before the latest run's timestamp via
-    // correlated subqueries. Matching is by normalized_source_name (stable
-    // across cosmetic renames). NULL when no observation that far back yet
-    // — which is the honest state today (2 days of remote history).
+    // For each row in the latest scrape:
+    //   - look up the closest historical price at 7 / 30 / 90 days before the
+    //     latest run's timestamp via correlated subqueries (NULL when no
+    //     observation that far back yet — the honest state when history is
+    //     sparse). Fills in automatically as the daily cron accumulates.
+    //   - left-join a `first_seen` CTE that pre-computes MIN(scraped_at) per
+    //     normalized SKU name once across the whole source_observations table.
+    //     Single full scan via idx_so_normalized is strictly cheaper than a
+    //     4th correlated subquery (~5,889 extra index probes per request).
     //
-    // Performance: 5,889 rows × 3 subqueries = ~18k lookups. With the
-    // existing idx_so_normalized index this completes in <100ms on the
-    // current ~12k-row corpus. A compound (normalized_source_name,
+    // Matching is by normalized_source_name (stable across cosmetic renames).
+    //
+    // Performance: 5,889 rows × 3 correlated subqueries = ~18k lookups, plus
+    // one CTE scan. With the existing idx_so_normalized this completes in
+    // <100ms on the current ~30k-row corpus. A compound (normalized_source_name,
     // scraped_at DESC) index will be worth adding once history reaches
     // 30+ days × 5,889 SKUs (~180k+ rows).
     //
@@ -73,12 +84,18 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
     // score float to the top so the workbench opens on recognizable chips.
     const latestTs = latestRun.finished_at ?? latestRun.started_at;
     const res = await env.DB.prepare(
-      `SELECT
+      `WITH first_seen AS (
+         SELECT normalized_source_name, MIN(scraped_at) AS first_seen_at
+         FROM source_observations
+         GROUP BY normalized_source_name
+       )
+       SELECT
          l.source_sku_name, l.normalized_source_name,
          l.vendor_inferred, l.segment_inferred,
          l.benchmark_score, l.rank, l.cpu_value,
          l.price_cents, l.raw_price_text, l.currency,
          l.url, l.scraped_at,
+         fs.first_seen_at,
          (SELECT price_cents FROM source_observations
             WHERE normalized_source_name = l.normalized_source_name
               AND scraped_at <= datetime(?2, '-7 days')
@@ -92,6 +109,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
               AND scraped_at <= datetime(?2, '-90 days')
             ORDER BY scraped_at DESC LIMIT 1) AS qoq_price_cents
        FROM source_observations l
+       LEFT JOIN first_seen fs ON fs.normalized_source_name = l.normalized_source_name
        WHERE l.scrape_run_id = ?1
        ORDER BY l.benchmark_score DESC, l.source_sku_name ASC;`,
     )

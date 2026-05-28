@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { ObservationRow } from '../api';
-import { deltaTone, fmtAbsCents, fmtDateTime, fmtInt, fmtPercent, fmtPrice } from '../format';
+import { deltaTone, fmtAbsCents, fmtDate, fmtDateTime, fmtInt, fmtPercent, fmtPrice } from '../format';
 
 interface Props {
   row: ObservationRow | null;
@@ -70,6 +70,16 @@ export default function UniverseDrawer({ row, onClose }: Props) {
               <dt>Raw text</dt><dd>{row.raw_price_text ?? '—'}</dd>
               <dt>Currency</dt><dd>{row.currency}</dd>
               <dt>Scraped at</dt><dd>{fmtDateTime(row.scraped_at)}</dd>
+              <dt>First seen</dt>
+              <dd>
+                {row.first_seen_at
+                  ? fmtDate(row.first_seen_at)
+                  : <span className="muted">—</span>}
+                {' '}
+                <span className="muted">
+                  (earliest observation of this normalized name across all scrapes)
+                </span>
+              </dd>
             </dl>
           </section>
 

@@ -47,6 +47,16 @@ export function fmtDateTime(iso: string | null | undefined): string {
   );
 }
 
+/** Date-only variant of fmtDateTime — YYYY-MM-DD (UTC). Same null/invalid handling. */
+export function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return EM_DASH;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
 export function fmtRelative(iso: string | null | undefined): string {
   if (!iso) return EM_DASH;
   const ms = Date.parse(iso);

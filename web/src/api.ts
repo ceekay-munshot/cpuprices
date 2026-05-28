@@ -155,6 +155,8 @@ export interface ObservationRow {
   currency: string;
   url: string | null;
   scraped_at: string;
+  /** ISO timestamp of the earliest observation of this normalized SKU name across all scrapes. Powers the "new SKU" filter. */
+  first_seen_at: string | null;
   /** Closest historical price 7 days before the latest scrape. Null when no history yet. */
   wow_price_cents: number | null;
   /** Closest historical price 30 days before the latest scrape. Null when no history yet. */

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ObservationRow } from '../api';
 import { useApi } from '../useApi';
-import { deltaTone, fmtAbsCents, fmtDateTime, fmtInt, fmtPercent, fmtPrice } from '../format';
+import { deltaTone, fmtAbsCents, fmtDate, fmtDateTime, fmtInt, fmtPercent, fmtPrice } from '../format';
 import UniverseDrawer from './UniverseDrawer';
 
 /**
@@ -19,6 +19,11 @@ import UniverseDrawer from './UniverseDrawer';
 
 const INITIAL_VISIBLE = 100;
 const LOAD_STEP = 100;
+
+// "New SKU" rolling window. Matches the qoq_price_cents 90-day convention in
+// the observations API. Exported so callers can format the chip label off the
+// same constant (single source of truth).
+const NEW_SKU_WINDOW_DAYS = 90;
 
 interface Delta {
   abs: number | null;
@@ -38,6 +43,7 @@ export default function FullUniverse() {
   const [vendor, setVendor] = useState<string>('all');
   const [segment, setSegment] = useState<string>('all');
   const [priceFilter, setPriceFilter] = useState<'all' | 'yes' | 'no'>('all');
+  const [listed, setListed] = useState<'all' | 'new' | 'established'>('all');
   const [search, setSearch] = useState('');
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
   const [selectedRow, setSelectedRow] = useState<ObservationRow | null>(null);
@@ -54,21 +60,29 @@ export default function FullUniverse() {
   const filtered = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
+    // Compute the cutoff once per pass — recomputed on each filter change so the
+    // window stays accurate even if the page sits open across midnight.
+    const cutoffIso = new Date(Date.now() - NEW_SKU_WINDOW_DAYS * 86_400_000).toISOString();
     return data.rows.filter((r) => {
       if (vendor !== 'all' && (r.vendor_inferred ?? 'Other') !== vendor) return false;
       if (segment !== 'all' && (r.segment_inferred ?? 'Other') !== segment) return false;
       if (priceFilter === 'yes' && r.price_cents == null) return false;
       if (priceFilter === 'no'  && r.price_cents != null) return false;
+      if (listed !== 'all') {
+        const isNew = r.first_seen_at != null && r.first_seen_at >= cutoffIso;
+        if (listed === 'new'         && !isNew) return false;
+        if (listed === 'established' &&  isNew) return false;
+      }
       if (q && !r.source_sku_name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [data, vendor, segment, priceFilter, search]);
+  }, [data, vendor, segment, priceFilter, listed, search]);
 
   // Reset scroll position when filters narrow the result set so the user
   // sees the new top, not a window into stale far-off rows.
   useEffect(() => {
     setVisibleCount(INITIAL_VISIBLE);
-  }, [vendor, segment, priceFilter, search]);
+  }, [vendor, segment, priceFilter, listed, search]);
 
   // IntersectionObserver-driven infinite scroll. Sentinel sits below the
   // table; when it enters the viewport (with a 400px lead so the user
@@ -123,6 +137,10 @@ export default function FullUniverse() {
             <Pill active={priceFilter === 'all'} onClick={() => setPriceFilter('all')}>All</Pill>
             <Pill active={priceFilter === 'yes'} onClick={() => setPriceFilter('yes')}>With price</Pill>
             <Pill active={priceFilter === 'no'}  onClick={() => setPriceFilter('no')}>No price</Pill>
+            <span className="filter-label" style={{ marginLeft: 12 }}>Listed</span>
+            <Pill active={listed === 'all'}         onClick={() => setListed('all')}>All</Pill>
+            <Pill active={listed === 'new'}         onClick={() => setListed('new')}>New (≤3mo)</Pill>
+            <Pill active={listed === 'established'} onClick={() => setListed('established')}>Established</Pill>
             <input
               className="filter-input"
               placeholder="Search CPU name"
@@ -193,7 +211,9 @@ function UniverseRow({ row, onSelect }: { row: ObservationRow; onSelect: (r: Obs
       <td>{row.segment_inferred == null
         ? <span className="muted">—</span>
         : <span className={`segment-pill segment-pill--${row.segment_inferred.toLowerCase()}`}>{row.segment_inferred}</span>}</td>
-      <td>{row.source_sku_name}</td>
+      <td title={row.first_seen_at ? `First seen: ${fmtDate(row.first_seen_at)}` : undefined}>
+        {row.source_sku_name}
+      </td>
       <td className="num mono">{fmtInt(row.benchmark_score)}</td>
       <td className="num mono">{fmtInt(row.rank)}</td>
       <td className="num mono">{row.cpu_value == null ? '—' : row.cpu_value.toFixed(2)}</td>
