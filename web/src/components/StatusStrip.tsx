@@ -8,10 +8,14 @@ interface Props {
 }
 
 /**
- * Universal status strip. After the basket tab was removed, this shows only
- * universe-scoped facts: when the source was scraped, how many CPUs that
- * scrape returned, and the cumulative observation count across every scrape
- * on record.
+ * Universal status strip. Shows capture-truth: when data last actually
+ * landed (successful scrape), how big that capture was, how much usable
+ * history exists, and — when the scraper is failing — the failure streak.
+ *
+ * Counts deliberately exclude failed runs: a failed run aborts mid-insert
+ * and leaves orphan rows that no view uses, so including them would
+ * overstate history (the pre-fix strip estimated "scrapes on record" by
+ * dividing the raw row count and quietly drifted as failures piled up).
  */
 export default function StatusStrip({ status, loading, error }: Props) {
   if (error) {
@@ -24,23 +28,32 @@ export default function StatusStrip({ status, loading, error }: Props) {
     );
   }
 
-  const run = status?.latest_run;
-  const rowsThisScrape = run?.rows_found ?? null;
-  const totalStored = status?.source_observations_count ?? null;
-  // "Scrapes on record" lets the user spot whether they're looking at 2 days
-  // of history vs 90, without needing to do arithmetic on the two row counts.
-  const totalScrapes =
-    rowsThisScrape != null && totalStored != null && rowsThisScrape > 0
-      ? Math.round(totalStored / rowsThisScrape)
-      : null;
+  const success = status?.latest_success_run;
+  const rowsLastCapture = success?.observations_inserted ?? success?.rows_found ?? null;
+  const failures = status?.consecutive_failures ?? 0;
+  const lastAttempt = status?.latest_run;
 
   return (
     <div className="status-strip">
       <div className="status-strip__inner">
-        <Pair label="Last scrape" value={loading ? '…' : fmtDateTime(status?.last_scraped_at)} />
-        <Pair label="Rows this scrape" value={loading ? '…' : fmtInt(rowsThisScrape)} />
-        <Pair label="Total rows on record" value={loading ? '…' : fmtInt(totalStored)} />
-        <Pair label="Scrapes on record" value={loading ? '…' : fmtInt(totalScrapes)} />
+        <Pair label="Last capture" value={loading ? '…' : fmtDateTime(status?.last_success_at)} />
+        <Pair label="Rows last capture" value={loading ? '…' : fmtInt(rowsLastCapture)} />
+        <Pair
+          label="Usable rows on record"
+          value={loading ? '…' : fmtInt(status?.source_observations_in_success_runs ?? null)}
+        />
+        <Pair label="Captures on record" value={loading ? '…' : fmtInt(status?.success_run_count ?? null)} />
+        {!loading && failures > 0 && (
+          <div
+            className="status-strip__pair"
+            title={lastAttempt?.error_message ?? 'Latest attempt did not record an error message'}
+          >
+            <span className="status-strip__label">Scraper:</span>
+            <span className="status-strip__value status-strip__value--alert">
+              failing · {fmtInt(failures)} attempt{failures === 1 ? '' : 's'} since last capture
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

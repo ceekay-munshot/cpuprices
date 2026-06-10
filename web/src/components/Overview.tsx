@@ -7,19 +7,18 @@ import OverviewDrawer, { type OverviewSelection } from './OverviewDrawer';
 /**
  * Overview tab — period-over-period price-trend grid.
  *
- * Y-axis: time periods (newest at top, live period bolded).
+ * Y-axis: time periods (newest at top, live period bolded). The API emits a
+ *         complete calendar spine through today, so the live row always
+ *         exists and rows accrue with the calendar forever. Periods with no
+ *         successful capture (scraper outage) arrive as ghost rows
+ *         (has_data=false) and render as visible gaps, not silent holes.
  * X-axis: 6 cells per row = (Server / Laptop / Desktop) × (Intel / AMD),
  *         grouped under segment headers.
- * Cells:  % change in avg price vs the immediately prior period in the
- *         chosen granularity, color-coded (red = price up = bad for buyer,
- *         green = price down = good for buyer).
+ * Cells:  % change in avg price vs the most recent prior CAPTURED period,
+ *         color-coded (red = price up = bad for buyer, green = price down =
+ *         good for buyer).
  *
- * Three granularity tabs (Week / Month / Quarter on Quarter) drive which
- * dataset feeds the rows. With sparse history (current state: ~5 days of
- * remote scrapes), most cells render "—" — they populate automatically
- * as the daily cron accumulates calendar coverage.
- *
- * Every cell stays clickable and opens an OverviewDrawer with the math.
+ * Every captured cell stays clickable and opens an OverviewDrawer with the math.
  */
 
 type Granularity = 'weekly' | 'monthly' | 'quarterly';
@@ -34,12 +33,14 @@ interface GranularitySpec {
 }
 
 const GRANULARITIES: GranularitySpec[] = [
+  // priorNote says "captured" because the comparison skips gap periods — after
+  // an outage, the % is vs the most recent week/month/quarter that has data.
   { id: 'weekly',    label: 'Week on Week',       live: 'WTD live', abbrev: 'WoW', liveAbbrev: 'WTD',
-    priorNote: 'vs prior ISO week' },
+    priorNote: 'vs most recent captured week' },
   { id: 'monthly',   label: 'Month on Month',     live: 'MTD live', abbrev: 'MoM', liveAbbrev: 'MTD',
-    priorNote: 'vs prior calendar month' },
+    priorNote: 'vs most recent captured month' },
   { id: 'quarterly', label: 'Quarter on Quarter', live: 'QTD live', abbrev: 'QoQ', liveAbbrev: 'QTD',
-    priorNote: 'vs prior calendar quarter' },
+    priorNote: 'vs most recent captured quarter' },
 ];
 
 const SEGMENTS      = ['Server', 'Laptop', 'Desktop'] as const;
@@ -110,13 +111,35 @@ export default function Overview() {
   const [selection, setSelection]     = useState<OverviewSelection | null>(null);
 
   const activeSpec = GRANULARITIES.find((g) => g.id === granularity)!;
-  const periods    = data ? data[granularity] : [];
+  // Normalize has_data: edge-cached responses from before the field existed
+  // can be served for ~30 min after a deploy — infer capture state from
+  // scrape_run_count so those rows don't all render as "no capture".
+  const periods = useMemo(
+    () =>
+      (data ? data[granularity] : []).map((p) => ({
+        ...p,
+        has_data: p.has_data ?? p.scrape_run_count > 0,
+      })),
+    [data, granularity],
+  );
+  const capturedCount = useMemo(
+    () => periods.filter((p) => p.has_data).length,
+    [periods],
+  );
+
+  // The % math compares against the most recent CAPTURED period — gap rows
+  // (scraper outage) are skipped, matching what the API computed server-side.
+  const priorCaptured = useCallback(
+    (periodIdx: number) =>
+      periods.slice(periodIdx + 1).find((p) => p.has_data) ?? null,
+    [periods],
+  );
 
   const selectCell = useCallback(
     (periodIdx: number, segment: Segment, manufacturer: Manufacturer) => {
       const period = periods[periodIdx];
-      const prior  = periods[periodIdx + 1] ?? null;
-      if (!period) return;
+      const prior  = priorCaptured(periodIdx);
+      if (!period || !period.has_data) return;
       const math = cellMath(period, prior, segment, manufacturer);
       setSelection({
         period:        { id: period.period_id, label: period.period_label, skuCount: math.curStandaloneCount,   avgPriceCents: math.curStandaloneAvg },
@@ -132,7 +155,7 @@ export default function Overview() {
         priorCohortAvgCents: math.priorCohortAvg,
       });
     },
-    [periods, activeSpec],
+    [periods, activeSpec, priorCaptured],
   );
 
   return (
@@ -141,7 +164,9 @@ export default function Overview() {
         <h2 className="section__title">Average price trends · period-over-period</h2>
         {data && (
           <span className="badge badge--info">
-            {periods.length} {periods.length === 1 ? 'period' : 'periods'} on record
+            {capturedCount === periods.length
+              ? `${periods.length} ${periods.length === 1 ? 'period' : 'periods'} on record`
+              : `${periods.length} periods · ${capturedCount} captured`}
           </span>
         )}
       </div>
@@ -194,19 +219,46 @@ export default function Overview() {
               </thead>
               <tbody>
                 {periods.map((p, i) => {
-                  const prior = periods[i + 1] ?? null;
+                  // The live (current) row exists even before its first
+                  // capture; an outage period renders as a visible gap row.
                   const isLive = i === 0;
+                  const rowClass = [
+                    isLive ? 'row--live' : '',
+                    p.has_data ? '' : 'row--gap',
+                  ].filter(Boolean).join(' ') || undefined;
+                  const prior = priorCaptured(i);
                   return (
-                    <tr key={p.period_id} className={isLive ? 'row--live' : undefined}>
+                    <tr key={p.period_id} className={rowClass}>
                       <td className="t--overview__period-cell">
                         {isLive && <span className="t--overview__live-tag">★ {activeSpec.liveAbbrev}</span>}
                         <strong>{p.period_label}</strong>
-                        {isLive && <span className="muted t--overview__live-flag">live</span>}
+                        {isLive && p.has_data && (
+                          <span className="muted t--overview__live-flag">live</span>
+                        )}
+                        {isLive && !p.has_data && (
+                          <span className="muted t--overview__live-flag">live · awaiting capture</span>
+                        )}
+                        {!isLive && !p.has_data && (
+                          <span className="t--overview__gap-tag" title="No successful scrape landed during this period">
+                            no capture
+                          </span>
+                        )}
                       </td>
                       {SEGMENTS.flatMap((segment, segIdx) =>
                         MANUFACTURERS.map((manufacturer) => {
-                          const math = cellMath(p, prior, segment, manufacturer);
                           const isSegEnd = manufacturer === 'AMD' && segIdx < SEGMENTS.length - 1;
+                          if (!p.has_data) {
+                            return (
+                              <td
+                                key={`${segment}-${manufacturer}`}
+                                className={`num mono delta na t--overview__cell-gap ${isSegEnd ? 't--overview__cell-seg-end' : ''}`}
+                                title="No successful scrape landed during this period"
+                              >
+                                <div>—</div>
+                              </td>
+                            );
+                          }
+                          const math = cellMath(p, prior, segment, manufacturer);
                           return (
                             <PeriodCell
                               key={`${segment}-${manufacturer}`}
@@ -239,15 +291,19 @@ export default function Overview() {
             <span className="legend__item"><span className="legend__swatch legend__swatch--up" /> Price increase</span>
             <span className="legend__item"><span className="legend__swatch legend__swatch--down" /> Price decrease</span>
             <span className="legend__item">★ Live row updates with each daily capture</span>
+            {capturedCount < periods.length && (
+              <span className="legend__item muted">"no capture" = scraper gap; % compares across it</span>
+            )}
             <span className="legend__item muted">
               Closed periods show {activeSpec.abbrev} % movement · click any cell for the math
             </span>
           </div>
 
-          {periods.length <= 1 && (
+          {capturedCount <= 1 && (
             <div className="caveat">
-              <strong>Sparse history.</strong> Only {periods.length} {activeSpec.label.toLowerCase()} period
-              has data so far, so every % change cell is &mdash;. Rows populate automatically as the
+              <strong>Sparse history.</strong> Only {capturedCount === 0 ? 'no' : capturedCount}{' '}
+              {activeSpec.label.toLowerCase()} {capturedCount === 1 ? 'period has' : 'periods have'} captured
+              data so far, so every % change cell is &mdash;. Rows populate automatically as the
               daily cron accumulates calendar coverage.
             </div>
           )}

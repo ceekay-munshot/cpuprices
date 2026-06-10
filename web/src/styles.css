@@ -36,6 +36,11 @@
   --accent-link:      #2a3a82;
   --accent-badge:     #4f8a3a;   /* fresh badge */
   --accent-badge-warn:#a86a18;   /* stale badge */
+  --accent-alert:     #e07b6a;   /* failure streak — legible red on the dark shell */
+
+  /* Motion (transform/opacity only — GPU-composited) */
+  --ease-out:    cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
   /* Typography */
   --font-ui:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -109,15 +114,21 @@ a:hover { text-decoration: underline; }
   font-size: var(--fs-sm);
   cursor: pointer;
   letter-spacing: 0.02em;
+  transition: transform 140ms var(--ease-out);
 }
-.btn:hover { background: rgba(241, 234, 216, 0.08); }
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { background: rgba(241, 234, 216, 0.08); }
+}
+.btn:active:not(:disabled) { transform: scale(0.97); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn--primary {
   background: var(--bg-page);
   color: var(--text-primary);
   border-color: var(--bg-page);
 }
-.btn--primary:hover { background: #fff8e7; }
+@media (hover: hover) and (pointer: fine) {
+  .btn--primary:hover { background: #fff8e7; }
+}
 
 .btn__soon {
   display: inline-block;
@@ -144,7 +155,15 @@ a:hover { text-decoration: underline; }
 .badge--fresh { color: var(--accent-badge); }
 .badge--stale { color: var(--accent-badge-warn); }
 .badge--info  { color: var(--text-on-dark-mut); }
+.badge--alert { color: var(--accent-alert); }
 .badge__dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+/* The alert dot breathes (opacity-only) so an active outage registers without
+ * stealing focus. Two slow beats, GPU-cheap, removed under reduced motion. */
+.badge--alert .badge__dot { animation: alert-beat 2.4s ease-in-out infinite; }
+@keyframes alert-beat {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
 
 /* status strip directly below header */
 .status-strip {
@@ -166,6 +185,7 @@ a:hover { text-decoration: underline; }
 .status-strip__value {
   font-family: var(--font-mono); color: var(--text-on-dark); font-weight: 600;
 }
+.status-strip__value--alert { color: var(--accent-alert); }
 
 /* ---------- top-level tab nav (under the status strip) ---------- */
 
@@ -314,6 +334,8 @@ a:hover { text-decoration: underline; }
   background: var(--bg-chip-active);
   color: var(--text-on-dark);
 }
+.tabs__btn { transition: transform 140ms var(--ease-out); }
+.tabs__btn:active { transform: scale(0.96); }
 
 /* ---------- tables ---------- */
 
@@ -417,8 +439,12 @@ table.t {
   font-size: 10px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text-secondary); cursor: pointer;
+  transition: transform 140ms var(--ease-out);
 }
-.cell-button:hover { border-color: var(--accent-link); color: var(--accent-link); background: #fff; }
+@media (hover: hover) and (pointer: fine) {
+  .cell-button:hover { border-color: var(--accent-link); color: var(--accent-link); background: #fff; }
+}
+.cell-button:active { transform: scale(0.96); }
 
 .quality-pill {
   display: inline-block;
@@ -467,8 +493,12 @@ table.t {
   font-size: var(--fs-xs);
   display: inline-flex; align-items: center; gap: 6px;
   cursor: pointer;
+  transition: transform 140ms var(--ease-out);
 }
-.filter-chip:hover { border-color: var(--border-strong); }
+@media (hover: hover) and (pointer: fine) {
+  .filter-chip:hover { border-color: var(--border-strong); }
+}
+.filter-chip:active { transform: scale(0.96); }
 .filter-chip--active { background: var(--bg-chip-active); color: var(--text-on-dark); border-color: var(--bg-chip-active); }
 .filter-input {
   background: #fff;
@@ -489,6 +519,11 @@ table.t {
   position: fixed; inset: 0;
   background: rgba(20, 22, 28, 0.32);
   z-index: 50;
+  opacity: 1;
+  transition: opacity 240ms var(--ease-drawer);
+}
+@starting-style {
+  .drawer-backdrop { opacity: 0; }
 }
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0;
@@ -498,6 +533,22 @@ table.t {
   z-index: 51;
   display: flex; flex-direction: column;
   box-shadow: -8px 0 24px rgba(0,0,0,0.12);
+  /* Enter from the right edge (transform-only, iOS drawer curve). Exit is
+   * unmount-instant by design: dismissal should be faster than entry. */
+  transform: translateX(0);
+  transition: transform 280ms var(--ease-drawer);
+}
+@starting-style {
+  .drawer { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer {
+    transition: opacity 160ms ease;
+    opacity: 1;
+  }
+  @starting-style {
+    .drawer { transform: translateX(0); opacity: 0; }
+  }
 }
 .drawer__head {
   padding: var(--sp-4) var(--sp-4);
@@ -739,4 +790,53 @@ table.t {
  * "live" flag sit on the same line. */
 .t--overview tbody tr.row--live td.t--overview__period-cell {
   background: #fbf6e6;
+}
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .btn, .filter-chip, .cell-button, .tabs__btn { transition: none; }
+  .btn:active:not(:disabled),
+  .filter-chip:active,
+  .cell-button:active,
+  .tabs__btn:active { transform: none; }
+  .badge--alert .badge__dot { animation: none; }
+  .drawer-backdrop { transition: none; }
+}
+
+/* Gap rows — calendar periods with no successful capture (scraper outage).
+ * Visibly recessed: muted label, hollow tag, non-interactive cells. The row
+ * must read as "hole in the record", not as a zero. */
+.t--overview tbody tr.row--gap td {
+  color: var(--text-muted);
+}
+.t--overview tbody tr.row--gap td.t--overview__period-cell strong {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.t--overview tbody tr.row--gap:hover td {
+  background: inherit; /* nothing to drill into — don't invite the click */
+}
+.t--overview tbody tr.row--gap:nth-child(even):hover td {
+  background: var(--bg-row-alt);
+}
+.t--overview tbody td.t--overview__cell-gap {
+  cursor: default;
+  color: var(--accent-na);
+}
+.t--overview__gap-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+/* A live period awaiting its first capture keeps the live tint but its
+ * cells stay quiet until data lands. */
+.t--overview tbody tr.row--live.row--gap td {
+  font-weight: 600;
 }

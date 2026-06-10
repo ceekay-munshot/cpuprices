@@ -46,6 +46,7 @@ export interface ScrapeRun {
   status: string;
   started_at: string;
   finished_at: string | null;
+  error_message: string | null;
   rows_found: number | null;
   rows_inserted: number | null;
   observations_inserted: number | null;
@@ -55,11 +56,24 @@ export interface ScrapeRun {
 }
 
 export interface StatusData {
+  /** Latest attempt of any status — debugging / CI verification. */
   latest_run: ScrapeRun | null;
+  /** Latest run that actually landed data — what the dashboard reflects.
+   *  Success-scoped fields are optional: edge-cached pre-upgrade responses
+   *  can be served for up to 30 min after a deploy. */
+  latest_success_run?: ScrapeRun | null;
   source_observations_count: number;
+  /** Rows attached to successful runs; failed runs leave orphan rows behind. */
+  source_observations_in_success_runs?: number;
   price_history_count: number;
+  success_run_count?: number;
+  /** Attempts since the last success that did not succeed — current outage streak. */
+  consecutive_failures?: number;
   last_scraped_at: string | null;
   minutes_since_last_scrape: number | null;
+  last_success_at?: string | null;
+  minutes_since_last_success?: number | null;
+  /** True iff the last SUCCESSFUL scrape is within the daily freshness window. */
   is_fresh_daily: boolean;
   source_note: string;
 }
@@ -192,11 +206,21 @@ export interface PeriodAgg {
   period_id: string;
   period_label: string;
   period_start: string;
+  /**
+   * false → calendar period with no successful capture (outage / pre-history
+   * gap). Optional because edge-cached responses from before this field
+   * existed can be served for up to 30 min after a deploy — consumers infer
+   * from scrape_run_count when absent.
+   */
+  has_data?: boolean;
   scrape_run_count: number;
-  last_scrape_run_id: number;
-  last_scraped_at: string;
+  last_scrape_run_id: number | null;
+  last_scraped_at: string | null;
   buckets: PeriodBucket[];
-  /** null for the oldest period in the list (no prior to compare against). */
+  /**
+   * Comparison vs the most recent PRIOR CAPTURED period (ghosts are skipped).
+   * null for ghost rows and for the oldest captured period.
+   */
   matched_vs_prior: MatchedComparison[] | null;
 }
 
