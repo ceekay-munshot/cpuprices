@@ -476,6 +476,18 @@ export async function scrapeAllIntoD1(opts: {
     throw err;
   }
 
+  // Rolling retention sweep (see migrations/0004). Runs only after a capture
+  // landed in full, and best-effort — a prune hiccup must not fail the scrape
+  // that just succeeded; the sweep simply runs again on the next capture.
+  if (status === 'success') {
+    try {
+      await pruneSupersededObservations(executor, logger);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(`[prune/${executor.label}] sweep failed (non-fatal): ${msg}`);
+    }
+  }
+
   return {
     dryRun: false,
     scrapeRunId,
@@ -536,6 +548,101 @@ async function markRunFailedBestEffort(
       `${tag} could not mark scrape_run ${scrapeRunId} as failed (will leave as 'running'): ${markMsg}`,
     );
   }
+}
+
+// ============================================================================
+// Retention sweep (see migrations/0004_observation_retention.sql)
+// ============================================================================
+
+/** Failed/partial-run rows are invisible to every reader; keep briefly for debugging. */
+const PRUNE_FAILED_RUN_AFTER_DAYS = 7;
+/** Superseded successful captures: long enough that open-period dailies and the
+ *  Universe tab's 7/30-day delta lookbacks keep daily grain. */
+const PRUNE_SUPERSEDED_AFTER_DAYS = 35;
+
+export interface PruneResult {
+  failedRunRowsDeleted: number;
+  supersededRowsDeleted: number;
+}
+
+/**
+ * Rolling retention: keep the table's data forever, flush the rest.
+ *
+ * Kept unconditionally: observations of each ISO week's and each calendar
+ * month's LAST successful run — ranked by data time then id, the same
+ * ranking period-aggregates uses to choose period snapshots, so exactly
+ * what the table shows is what survives (quarters read their last month's
+ * snapshot). Everything else flushes once outside its retention window.
+ *
+ * Best-effort by contract: callers must not fail a successful scrape over a
+ * prune error — worst case the sweep runs again tomorrow.
+ */
+export async function pruneSupersededObservations(
+  executor: D1Executor,
+  logger: Logger,
+): Promise<PruneResult> {
+  const failedSql =
+    `DELETE FROM source_observations ` +
+    `WHERE scraped_at < datetime('now', '-${PRUNE_FAILED_RUN_AFTER_DAYS} days') ` +
+    `AND scrape_run_id IN (SELECT id FROM scrape_runs WHERE status != 'success');`;
+
+  // per_week/per_month group by (run, period) — mirrors period-aggregates —
+  // so a run straddling a boundary stays keep-eligible from either side.
+  const supersededSql = `
+    WITH per_week AS (
+      SELECT so.scrape_run_id,
+             date(so.scraped_at, '-6 days', 'weekday 1') AS period_id,
+             MAX(so.scraped_at) AS run_ended_at
+      FROM source_observations so
+      JOIN scrape_runs sr ON sr.id = so.scrape_run_id
+      WHERE sr.status = 'success'
+      GROUP BY so.scrape_run_id, period_id
+    ),
+    per_month AS (
+      SELECT so.scrape_run_id,
+             strftime('%Y-%m', so.scraped_at) AS period_id,
+             MAX(so.scraped_at) AS run_ended_at
+      FROM source_observations so
+      JOIN scrape_runs sr ON sr.id = so.scrape_run_id
+      WHERE sr.status = 'success'
+      GROUP BY so.scrape_run_id, period_id
+    ),
+    keep AS (
+      SELECT scrape_run_id FROM (
+        SELECT scrape_run_id,
+               ROW_NUMBER() OVER (PARTITION BY period_id ORDER BY run_ended_at DESC, scrape_run_id DESC) AS rn
+        FROM per_week
+      ) WHERE rn = 1
+      UNION
+      SELECT scrape_run_id FROM (
+        SELECT scrape_run_id,
+               ROW_NUMBER() OVER (PARTITION BY period_id ORDER BY run_ended_at DESC, scrape_run_id DESC) AS rn
+        FROM per_month
+      ) WHERE rn = 1
+    )
+    DELETE FROM source_observations
+    WHERE scraped_at < datetime('now', '-${PRUNE_SUPERSEDED_AFTER_DAYS} days')
+      AND scrape_run_id NOT IN (SELECT scrape_run_id FROM keep);
+  `;
+
+  const changesOf = (blocks: D1ResultBlock[]): number => {
+    const meta = blocks[0]?.meta;
+    const v = meta?.['changes'];
+    return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+  };
+
+  const failedRes = await executor.exec(failedSql);
+  const supersededRes = await executor.exec(supersededSql);
+  const result: PruneResult = {
+    failedRunRowsDeleted: changesOf(failedRes),
+    supersededRowsDeleted: changesOf(supersededRes),
+  };
+  logger.info(
+    `[prune/${executor.label}] flushed ${result.failedRunRowsDeleted} failed-run rows, ` +
+      `${result.supersededRowsDeleted} superseded rows ` +
+      `(weekly+monthly snapshots kept forever)`,
+  );
+  return result;
 }
 
 export async function getPriceHistoryCount(executor: D1Executor): Promise<number> {

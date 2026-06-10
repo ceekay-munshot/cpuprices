@@ -1,0 +1,16 @@
+-- Retention policy for source_observations (2026-06-11).
+--
+-- The dashboard's period table needs exactly ONE snapshot per closed period
+-- (the last successful capture of each ISO week / calendar month — quarters
+-- read their last month's). Every other daily capture is superseded the
+-- moment a later one lands in the same period, so unbounded append-only
+-- growth (~600MB/yr) buys nothing. The daily scrape now prunes:
+--   - failed/partial-run observations after 7 days (no view reads them)
+--   - superseded successful captures after 35 days (open-period dailies and
+--     the Universe tab's 7/30-day delta lookbacks stay at daily grain)
+--   - weekly + monthly snapshot runs are kept FOREVER (the table's data)
+--
+-- DELETE therefore becomes a sanctioned operation on source_observations.
+-- Rows stay immutable (the no-update trigger remains), and price_history
+-- keeps both triggers — it is small and is the curated audit trail.
+DROP TRIGGER IF EXISTS source_observations_no_delete;

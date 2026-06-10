@@ -20,6 +20,10 @@ on:
 
 permissions:
   contents: read
+  # actions:write lets the keepalive step reset GitHub's 60-day scheduled-
+  # workflow auto-disable timer (scheduled runs alone don't count as repo
+  # activity — without this, two quiet months would silently stop the cron).
+  actions: write
 
 concurrency:
   group: scrape-remote
@@ -108,3 +112,12 @@ jobs:
           fi
           if [ "${fail}" -ne 0 ]; then exit 1; fi
           echo "Scrape verified: status=success, observations_inserted=${obs_inserted}."
+
+      - name: Keep scheduled workflow alive
+        # GitHub disables cron workflows after ~60 days without repo activity;
+        # re-enabling (a no-op when already enabled) resets that timer.
+        # if: always() so an outage (failing scrapes) can't lapse the schedule.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/scrape.yml/enable"
