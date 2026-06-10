@@ -292,12 +292,13 @@ async function loadGranularity(
         : `strftime('%Y-%m', scraped_at)`; // quarterly: aggregate by month first, then collapse in TS
 
   // Step 1: which scrape_run is the last one in each period?
-  // We pick the highest scrape_run_id whose scraped_at falls in the period,
-  // restricted to runs that actually finished successfully. A stuck or partial
-  // run (status='running' with finished_at=null, or status='failed') would
-  // otherwise silently become the period's "latest snapshot" and pollute the
-  // averages — observed in the wild as scrape_run #4 leaving the dashboard
-  // with 0 Server-Intel rows in its live period.
+  // "Last" means latest DATA timestamp (run_ended_at), tie-broken by run id —
+  // NOT max run id. Run ids don't track data time: a Wayback backfill inserts
+  // an older capture under a newer id, and id-ordering made June's monthly
+  // row regress to the backfilled Jun 3 snapshot. Restricted to runs that
+  // finished successfully: a stuck or partial run would otherwise silently
+  // become the period's snapshot (observed as scrape_run #4 leaving the
+  // dashboard with 0 Server-Intel rows in its live period).
   const metaSql = `
     WITH per_run AS (
       SELECT
@@ -310,47 +311,50 @@ async function loadGranularity(
       WHERE sr.status = 'success'
       GROUP BY so.scrape_run_id, period_id
     ),
-    last_run_per_period AS (
+    ranked AS (
       SELECT
-        period_id,
-        MAX(scrape_run_id) AS last_scrape_run_id,
-        COUNT(DISTINCT scrape_run_id) AS scrape_run_count
+        per_run.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY period_id
+          ORDER BY run_ended_at DESC, scrape_run_id DESC
+        ) AS rn,
+        -- per_run is one row per (run, period), so COUNT(*) = distinct runs.
+        COUNT(*) OVER (PARTITION BY period_id) AS scrape_run_count
       FROM per_run
-      GROUP BY period_id
     )
     SELECT
-      lr.period_id,
-      pr.run_ended_at  AS period_start,   -- timestamp of the chosen run
-      lr.scrape_run_count,
-      lr.last_scrape_run_id
-    FROM last_run_per_period lr
-    JOIN per_run pr ON pr.scrape_run_id = lr.last_scrape_run_id AND pr.period_id = lr.period_id
-    ORDER BY lr.period_id DESC;
+      period_id,
+      run_ended_at AS period_start,   -- timestamp of the chosen run
+      scrape_run_count,
+      scrape_run_id AS last_scrape_run_id
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY period_id DESC;
   `;
   const metaRes = await env.DB.prepare(metaSql).all<RawPeriodMetaRow>();
   let metaRows = metaRes.results;
 
   // For quarterly, collapse months -> quarters: the quarter's snapshot is the
-  // latest scrape run across its months, and scrape_run_count sums over ALL
-  // months (not just those that raised the max run id).
+  // run with the latest DATA timestamp across its months (monthly rows carry
+  // their chosen run's run_ended_at in period_start — ISO strings compare
+  // chronologically). scrape_run_count sums over ALL months.
   if (granularity === 'quarterly') {
     const collapsed = new Map<string, RawPeriodMetaRow>();
     for (const row of metaRows) {
-      const { id: qid, start: qstart } = isoQuarter(row.period_start);
+      const { id: qid } = isoQuarter(row.period_start);
       const existing = collapsed.get(qid);
       if (!existing) {
-        collapsed.set(qid, {
-          period_id: qid,
-          period_start: qstart,
-          scrape_run_count: row.scrape_run_count,
-          last_scrape_run_id: row.last_scrape_run_id,
-        });
+        collapsed.set(qid, { ...row, period_id: qid });
       } else {
         existing.scrape_run_count += row.scrape_run_count;
-        existing.last_scrape_run_id = Math.max(
-          existing.last_scrape_run_id,
-          row.last_scrape_run_id,
-        );
+        if (
+          row.period_start > existing.period_start ||
+          (row.period_start === existing.period_start &&
+            row.last_scrape_run_id > existing.last_scrape_run_id)
+        ) {
+          existing.period_start = row.period_start;
+          existing.last_scrape_run_id = row.last_scrape_run_id;
+        }
       }
     }
     metaRows = Array.from(collapsed.values()).sort((a, b) =>

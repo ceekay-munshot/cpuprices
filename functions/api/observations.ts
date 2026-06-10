@@ -17,6 +17,8 @@ interface LatestRunRow {
   id: number;
   started_at: string;
   finished_at: string | null;
+  /** MAX(scraped_at) of the run's observations — the data's own timestamp. */
+  data_ts: string | null;
 }
 
 interface ObservationRow {
@@ -48,8 +50,18 @@ interface ObservationRow {
 
 export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
   safeHandle(async () => {
+    // "Latest" = the SUCCESSFUL run whose DATA is newest — not max run id.
+    // Run ids don't track data time: a Wayback backfill inserts an older
+    // capture under a newer id, and a failed run (no status filter) would
+    // expose a partial row set as the universe.
     const latestRun = await env.DB.prepare(
-      `SELECT id, started_at, finished_at FROM scrape_runs ORDER BY id DESC LIMIT 1;`,
+      `SELECT sr.id, sr.started_at, sr.finished_at,
+              (SELECT MAX(so.scraped_at) FROM source_observations so
+                WHERE so.scrape_run_id = sr.id) AS data_ts
+       FROM scrape_runs sr
+       WHERE sr.status = 'success'
+       ORDER BY data_ts DESC
+       LIMIT 1;`,
     ).first<LatestRunRow>();
 
     if (!latestRun) {
@@ -82,7 +94,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
     //
     // SQLite DESC sorts NULLs last by default — rows with a benchmark
     // score float to the top so the workbench opens on recognizable chips.
-    const latestTs = latestRun.finished_at ?? latestRun.started_at;
+    // Cutoffs anchor to the DATA's timestamp — for a backfilled run the run
+    // row finishes "now" but the observations carry the capture time.
+    const latestTs = latestRun.data_ts ?? latestRun.finished_at ?? latestRun.started_at;
     const res = await env.DB.prepare(
       `WITH first_seen AS (
          SELECT normalized_source_name, MIN(scraped_at) AS first_seen_at
@@ -119,7 +133,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
     return {
       source_note: PASSMARK_NOTE,
       latest_scrape_run_id: latestRun.id,
-      latest_scraped_at: latestRun.finished_at ?? latestRun.started_at,
+      latest_scraped_at: latestTs,
       count: res.results.length,
       rows: res.results,
     };

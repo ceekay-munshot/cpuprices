@@ -276,9 +276,20 @@ export async function scrapeAllIntoD1(opts: {
   browser: Browser;
   logger: Logger;
   dryRun?: boolean;
+  /**
+   * Row source override. Defaults to the live /cpu-list/all scrape; the
+   * Wayback backfill script substitutes rows parsed from an archived
+   * snapshot (with scraped_at/url rewritten to the snapshot's).
+   */
+  scrapeRows?: (ctx: {
+    browser: Browser;
+    logger: Logger;
+    trackedSkus: TrackedSku[];
+  }) => Promise<CpubenchmarkRow[]>;
 }): Promise<AllScrapeResult> {
   const { executor, trackedSkus, browser, logger } = opts;
   const dryRun = opts.dryRun === true;
+  const scrapeRows = opts.scrapeRows ?? scrapeAllRows;
 
   const sourceId = scalarNumber(
     await executor.exec(`SELECT id FROM sources WHERE slug = ${sqlString(SOURCE_SLUG)};`),
@@ -322,8 +333,8 @@ export async function scrapeAllIntoD1(opts: {
   const beforeObservations = await getSourceObservationsCount(executor);
   const beforePriceHistory = await getPriceHistoryCount(executor);
 
-  const scraped = await scrapeAllRows({ browser, logger, trackedSkus });
-  logger.info(`[all/${executor.label}] scraped ${scraped.length} rows from /cpu-list/all`);
+  const scraped = await scrapeRows({ browser, logger, trackedSkus });
+  logger.info(`[all/${executor.label}] scraped ${scraped.length} rows`);
 
   const matched = new Map<string, { row: CpubenchmarkRow; skuId: number }>();
   for (const row of scraped) {
@@ -344,8 +355,8 @@ export async function scrapeAllIntoD1(opts: {
     return {
       dryRun: true,
       scrapeRunId: null,
-      status:
-        matched.size === trackedSkus.length ? 'success' : matched.size > 0 ? 'partial' : 'failure',
+      // Mirrors the real path: success keys off the observations capture.
+      status: rowsFound > 0 ? 'success' : 'failure',
       rowsFound,
       rowsInsertedObservations: rowsFound, // would-be count
       rowsInsertedPriceHistory: matched.size, // would-be count
@@ -431,8 +442,12 @@ export async function scrapeAllIntoD1(opts: {
     const finishedAt = new Date().toISOString();
     rowsInsertedObs = obsValues.length;
     rowsInsertedPh = phValues.length;
+    // Success = the OBSERVATIONS capture is complete and non-empty. Tracked-SKU
+    // match shortfalls don't demote the run: a chip delisted upstream would
+    // otherwise turn every future run 'partial' and starve the period table
+    // (they're already surfaced via tracked_skus_missing).
     status =
-      rowsInsertedObs === rowsFound && rowsInsertedPh === trackedSkus.length
+      rowsInsertedObs === rowsFound && rowsFound > 0
         ? 'success'
         : rowsInsertedObs > 0
           ? 'partial'
