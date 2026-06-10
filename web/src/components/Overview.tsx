@@ -111,7 +111,17 @@ export default function Overview() {
   const [selection, setSelection]     = useState<OverviewSelection | null>(null);
 
   const activeSpec = GRANULARITIES.find((g) => g.id === granularity)!;
-  const periods    = data ? data[granularity] : [];
+  // Normalize has_data: edge-cached responses from before the field existed
+  // can be served for ~30 min after a deploy — infer capture state from
+  // scrape_run_count so those rows don't all render as "no capture".
+  const periods = useMemo(
+    () =>
+      (data ? data[granularity] : []).map((p) => ({
+        ...p,
+        has_data: p.has_data ?? p.scrape_run_count > 0,
+      })),
+    [data, granularity],
+  );
   const capturedCount = useMemo(
     () => periods.filter((p) => p.has_data).length,
     [periods],
