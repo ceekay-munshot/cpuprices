@@ -229,9 +229,46 @@ export interface AllScrapeResult {
   vendorAggregates: VendorAggregate[];
 }
 
-/** Chunk size for the source_observations INSERT to stay well under
- *  D1 REST and wrangler --file per-request size limits. */
-const OBSERVATIONS_INSERT_CHUNK = 500;
+/**
+ * D1 rejects any single SQL statement longer than 100KB with
+ * "statement too long: SQLITE_TOOBIG" (error 7500) — this is a per-STATEMENT
+ * limit, separate from the ~1MB per-request limit the executor guards.
+ *
+ * A fixed 500-row chunk worked until 2026-05-27, then PassMark row content
+ * (longer names/URLs) pushed some chunks past 100KB and every daily scrape
+ * died mid-insert for two weeks. Chunk by accumulated BYTES, not row count,
+ * with headroom for the INSERT prefix and future row-width drift.
+ */
+const INSERT_VALUES_MAX_BYTES = 80_000;
+/** Secondary sanity cap so a pathological run of tiny rows still batches sanely. */
+const INSERT_VALUES_MAX_ROWS = 500;
+
+/**
+ * Greedily pack VALUES tuples into chunks that stay under both caps.
+ * Oversized single tuples (shouldn't exist; one row is ~250 bytes) get a
+ * chunk of their own rather than being dropped silently.
+ */
+function chunkValuesByBytes(values: string[]): string[][] {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let currentBytes = 0;
+  for (const tuple of values) {
+    const tupleBytes = Buffer.byteLength(tuple, 'utf-8') + 4; // ",\n  " separator
+    if (
+      current.length > 0 &&
+      (currentBytes + tupleBytes > INSERT_VALUES_MAX_BYTES ||
+        current.length >= INSERT_VALUES_MAX_ROWS)
+    ) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(tuple);
+    currentBytes += tupleBytes;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
 
 export async function scrapeAllIntoD1(opts: {
   executor: D1Executor;
@@ -361,14 +398,16 @@ export async function scrapeAllIntoD1(opts: {
       );
     }
 
-    for (let i = 0; i < obsValues.length; i += OBSERVATIONS_INSERT_CHUNK) {
-      const chunk = obsValues.slice(i, i + OBSERVATIONS_INSERT_CHUNK);
+    const obsChunks = chunkValuesByBytes(obsValues);
+    let obsWritten = 0;
+    for (const chunk of obsChunks) {
       const sql = [
         'PRAGMA foreign_keys = ON;',
         `INSERT INTO source_observations (source_id, scrape_run_id, source_sku_name, normalized_source_name, vendor_inferred, segment_inferred, benchmark_score, rank, cpu_value, price_cents, raw_price_text, currency, url, scraped_at) VALUES\n  ${chunk.join(',\n  ')};`,
       ].join('\n');
       await executor.execBatch(sql);
-      logger.info(`[all/${executor.label}] observations inserted ${Math.min(i + OBSERVATIONS_INSERT_CHUNK, obsValues.length)}/${obsValues.length}`);
+      obsWritten += chunk.length;
+      logger.info(`[all/${executor.label}] observations inserted ${obsWritten}/${obsValues.length} (${obsChunks.length} chunks)`);
     }
 
     const phValues: string[] = [];
@@ -382,10 +421,10 @@ export async function scrapeAllIntoD1(opts: {
           `'USD', 'street', ${sqlValue(row.cpuMark)}, ${sqlValue(row.url)}, ${sqlString(row.scrapedAt)})`,
       );
     }
-    if (phValues.length > 0) {
+    for (const chunk of chunkValuesByBytes(phValues)) {
       await executor.execBatch(
         'PRAGMA foreign_keys = ON;\n' +
-          `INSERT INTO price_history (sku_id, source_id, scrape_run_id, source_sku_name, price_cents, raw_price_text, currency, price_type, benchmark_score, url, scraped_at) VALUES\n  ${phValues.join(',\n  ')};`,
+          `INSERT INTO price_history (sku_id, source_id, scrape_run_id, source_sku_name, price_cents, raw_price_text, currency, price_type, benchmark_score, url, scraped_at) VALUES\n  ${chunk.join(',\n  ')};`,
       );
     }
 
@@ -469,9 +508,12 @@ async function markRunFailedBestEffort(
   logger.error(
     `${tag} scrape_run ${scrapeRunId} threw mid-execution; marking as 'failure'. cause: ${msg}`,
   );
+  // Persist the cause on the run row — the 2026-05/06 SQLITE_TOOBIG outage
+  // ran for two weeks partly because failed runs carried no error_message.
+  const storedMsg = msg.length > 500 ? msg.slice(0, 500) + '…' : msg;
   try {
     await executor.execBatch(
-      `UPDATE scrape_runs SET status = 'failure', finished_at = ${sqlString(finishedAt)} WHERE id = ${scrapeRunId};`,
+      `UPDATE scrape_runs SET status = 'failure', finished_at = ${sqlString(finishedAt)}, error_message = ${sqlString(storedMsg)} WHERE id = ${scrapeRunId};`,
     );
   } catch (markErr) {
     const markMsg = markErr instanceof Error ? markErr.message : String(markErr);

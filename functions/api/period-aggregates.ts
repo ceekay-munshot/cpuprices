@@ -12,9 +12,19 @@
  * Only the (Server / Laptop / Desktop) × (Intel / AMD) cross is returned —
  * matching the Overview tab's 6-cell layout.
  *
- * Honest about sparsity: with N days of scrape history, only one period
- * exists for monthly/quarterly until the calendar rolls over. Each period
- * row includes scrape_run_count so the UI can flag thin coverage.
+ * CALENDAR-DRIVEN, not data-driven: the period list is a complete calendar
+ * spine from the oldest captured period through TODAY. Periods with no
+ * successful scrape inside them are still emitted, as ghost rows with
+ * has_data=false and null buckets — so the live (current) period always
+ * exists, the table grows with the calendar forever, and a scraper outage
+ * shows up as visible gap rows instead of silently freezing the table
+ * (which is exactly what happened 2026-05-26 → 2026-06-09).
+ *
+ * % comparisons skip ghosts: each captured period is compared against the
+ * most recent prior captured period.
+ *
+ * Honest about sparsity: each period row includes scrape_run_count so the
+ * UI can flag thin coverage.
  */
 
 import { jsonError, PASSMARK_NOTE, safeHandle, type Env } from '../_lib';
@@ -66,11 +76,16 @@ interface PeriodAgg {
   period_id: string;
   period_label: string;
   period_start: string;
+  /** false → calendar period with no successful capture (outage / pre-history gap). */
+  has_data: boolean;
   scrape_run_count: number;
-  last_scrape_run_id: number;
-  last_scraped_at: string;
+  last_scrape_run_id: number | null;
+  last_scraped_at: string | null;
   buckets: BucketAgg[];
-  /** null for the oldest period in the list (no prior to compare against). */
+  /**
+   * Comparison vs the most recent PRIOR CAPTURED period (ghosts are skipped).
+   * null for ghost rows and for the oldest captured period.
+   */
   matched_vs_prior: MatchedComparison[] | null;
 }
 
@@ -153,6 +168,77 @@ function formatLabel(
   return `${q}-${yyyy.slice(2)}`;
 }
 
+// ============================================================================
+// Calendar spine — every period from the oldest capture through today.
+// ============================================================================
+
+type Granularity = 'weekly' | 'monthly' | 'quarterly';
+
+/** ISO date (YYYY-MM-DD) of the Monday of the Mon-Sun week containing `d`. */
+function mondayOf(d: Date): string {
+  const monday = new Date(d);
+  monday.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return monday.toISOString().slice(0, 10);
+}
+
+/** The period id that contains `now`, per granularity. */
+function currentPeriodId(granularity: Granularity, now: Date): string {
+  if (granularity === 'weekly') return mondayOf(now);
+  if (granularity === 'monthly') return now.toISOString().slice(0, 7);
+  return isoQuarter(now.toISOString()).id;
+}
+
+/** Step a period id backward by one period. Ids are self-describing:
+ *  weekly = the week's Monday (YYYY-MM-DD), monthly = YYYY-MM, quarterly = YYYY-Qn. */
+function prevPeriodId(granularity: Granularity, id: string): string {
+  if (granularity === 'weekly') {
+    const d = new Date(`${id}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 7);
+    return d.toISOString().slice(0, 10);
+  }
+  if (granularity === 'monthly') {
+    const [y = 0, m = 1] = id.split('-').map(Number);
+    return m <= 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  }
+  const [y = 0, q = 1] = id.split('-Q').map(Number);
+  return q <= 1 ? `${y - 1}-Q4` : `${y}-Q${q - 1}`;
+}
+
+/** Calendar start of a period, as an ISO date — used as period_start for ghosts. */
+function periodStartOf(granularity: Granularity, id: string): string {
+  if (granularity === 'weekly') return id;
+  if (granularity === 'monthly') return `${id}-01`;
+  const [y = '', q = '1'] = id.split('-Q');
+  return `${y}-${String((Number(q) - 1) * 3 + 1).padStart(2, '0')}-01`;
+}
+
+/**
+ * DESCENDING list of every period id from the period containing `now` back
+ * through `oldestId` (inclusive). If a captured period somehow sits beyond
+ * "now" (clock skew, bad scraped_at), start from it rather than drop it.
+ *
+ * Hard-capped as a runaway guard — one bogus 1970 scraped_at must not turn
+ * into a 30,000-row response. Walks NEWEST→oldest so hitting the cap sheds
+ * ancient rows, never the live one. All three id formats compare correctly
+ * as strings (fixed-width, big-endian date components).
+ */
+function buildSpineDesc(
+  granularity: Granularity,
+  oldestId: string,
+  newestDataId: string,
+  now: Date,
+): string[] {
+  const SPINE_MAX = 600;
+  const current = currentPeriodId(granularity, now);
+  let id = newestDataId > current ? newestDataId : current;
+  const ids: string[] = [];
+  while (id >= oldestId && ids.length < SPINE_MAX) {
+    ids.push(id);
+    id = prevPeriodId(granularity, id);
+  }
+  return ids;
+}
+
 export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
   const response = await safeHandle(async () => {
     // Three independent granularity workloads — fan them out so D1 latency
@@ -185,18 +271,22 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
 
 async function loadGranularity(
   env: Env,
-  granularity: 'weekly' | 'monthly' | 'quarterly',
+  granularity: Granularity,
 ): Promise<PeriodAgg[]> {
   // SQLite period_id derivation:
-  //  weekly  -> strftime('%Y-W%W', scraped_at)
-  //  monthly -> strftime('%Y-%m',  scraped_at)
+  //  weekly  -> Monday of the Mon-Sun week, as YYYY-MM-DD. ('-6 days' then
+  //             'weekday 1' lands on the week's own Monday for every weekday.)
+  //             A date id makes the calendar spine trivial to generate in TS
+  //             and — unlike strftime('%Y-W%W') — never splits the week that
+  //             straddles a year boundary into two periods.
+  //  monthly -> strftime('%Y-%m', scraped_at)
   //  quarter -> computed in TS (SQLite lacks quarter formatter)
   //
   // For weekly/monthly we group at the SQL level. For quarterly we group at
   // the application level since "year-Q" needs Math.floor(month/3)+1.
   const periodExpr =
     granularity === 'weekly'
-      ? `strftime('%Y-W%W', scraped_at)`
+      ? `date(scraped_at, '-6 days', 'weekday 1')`
       : granularity === 'monthly'
         ? `strftime('%Y-%m', scraped_at)`
         : `strftime('%Y-%m', scraped_at)`; // quarterly: aggregate by month first, then collapse in TS
@@ -240,30 +330,27 @@ async function loadGranularity(
   const metaRes = await env.DB.prepare(metaSql).all<RawPeriodMetaRow>();
   let metaRows = metaRes.results;
 
-  // For quarterly, collapse months -> quarters by picking the latest scrape
-  // run across the months that belong to the same quarter.
+  // For quarterly, collapse months -> quarters: the quarter's snapshot is the
+  // latest scrape run across its months, and scrape_run_count sums over ALL
+  // months (not just those that raised the max run id).
   if (granularity === 'quarterly') {
     const collapsed = new Map<string, RawPeriodMetaRow>();
     for (const row of metaRows) {
       const { id: qid, start: qstart } = isoQuarter(row.period_start);
       const existing = collapsed.get(qid);
-      if (!existing || row.last_scrape_run_id > existing.last_scrape_run_id) {
+      if (!existing) {
         collapsed.set(qid, {
           period_id: qid,
-          period_start: existing
-            ? row.last_scrape_run_id > existing.last_scrape_run_id
-              ? row.period_start
-              : existing.period_start
-            : row.period_start,
-          scrape_run_count:
-            (existing?.scrape_run_count ?? 0) + row.scrape_run_count,
-          last_scrape_run_id: existing
-            ? Math.max(existing.last_scrape_run_id, row.last_scrape_run_id)
-            : row.last_scrape_run_id,
+          period_start: qstart,
+          scrape_run_count: row.scrape_run_count,
+          last_scrape_run_id: row.last_scrape_run_id,
         });
-        // Use quarter start for display
-        const merged = collapsed.get(qid)!;
-        merged.period_start = qstart;
+      } else {
+        existing.scrape_run_count += row.scrape_run_count;
+        existing.last_scrape_run_id = Math.max(
+          existing.last_scrape_run_id,
+          row.last_scrape_run_id,
+        );
       }
     }
     metaRows = Array.from(collapsed.values()).sort((a, b) =>
@@ -334,38 +421,63 @@ async function loadGranularity(
     matchedByPeriod.set(p.periodId, pairResults[idx] ?? []);
   });
 
-  return metaRows.map((m, i) => {
-    const found = byRun.get(m.last_scrape_run_id) ?? [];
-    const buckets: BucketAgg[] = [];
-    for (const segment of SEGMENTS) {
-      for (const manufacturer of MANUFACTURERS) {
-        const match = found.find(
-          (b) => b.segment === segment && b.manufacturer === manufacturer,
-        );
-        buckets.push(
-          match ?? {
-            segment,
-            manufacturer,
-            avg_price_cents: null,
-            sku_count: 0,
-          },
-        );
-      }
+  // Step 4: lay the captured periods onto the full calendar spine. Slots
+  // without a capture become ghost rows — the current (live) period is always
+  // emitted, so the table keeps growing with the calendar even when the
+  // scraper is down, and outage gaps stay visible instead of collapsing.
+  const byId = new Map(metaRows.map((m) => [m.period_id, m]));
+  const newestData = metaRows[0]?.period_id;
+  const oldestData = metaRows[metaRows.length - 1]?.period_id;
+  if (!newestData || !oldestData) return [];
+  const spine = buildSpineDesc(granularity, oldestData, newestData, new Date());
+
+  return spine.map((id) => {
+    const m = byId.get(id);
+    if (!m) {
+      const start = periodStartOf(granularity, id);
+      return {
+        period_id: id,
+        period_label: formatLabel(id, granularity, start),
+        period_start: start,
+        has_data: false,
+        scrape_run_count: 0,
+        last_scrape_run_id: null,
+        last_scraped_at: null,
+        buckets: fillBucketGrid([]),
+        matched_vs_prior: null,
+      };
     }
-    const hasPrior = i < metaRows.length - 1;
+    // matchedByPeriod has no entry for the oldest captured period (nothing
+    // earlier to compare against) — that's the only captured row with null.
+    const matched = matchedByPeriod.get(m.period_id);
     return {
       period_id: m.period_id,
       period_label: formatLabel(m.period_id, granularity, m.period_start),
       period_start: m.period_start,
+      has_data: true,
       scrape_run_count: m.scrape_run_count,
       last_scrape_run_id: m.last_scrape_run_id,
       last_scraped_at: m.period_start,
-      buckets,
-      matched_vs_prior: hasPrior
-        ? fillMatchedGrid(matchedByPeriod.get(m.period_id) ?? [])
-        : null,
+      buckets: fillBucketGrid(byRun.get(m.last_scrape_run_id) ?? []),
+      matched_vs_prior: matched ? fillMatchedGrid(matched) : null,
     };
   });
+}
+
+/** Ensure all 6 (segment × manufacturer) bucket cells exist, missing → null avg. */
+function fillBucketGrid(found: BucketAgg[]): BucketAgg[] {
+  const out: BucketAgg[] = [];
+  for (const segment of SEGMENTS) {
+    for (const manufacturer of MANUFACTURERS) {
+      const match = found.find(
+        (b) => b.segment === segment && b.manufacturer === manufacturer,
+      );
+      out.push(
+        match ?? { segment, manufacturer, avg_price_cents: null, sku_count: 0 },
+      );
+    }
+  }
+  return out;
 }
 
 /**

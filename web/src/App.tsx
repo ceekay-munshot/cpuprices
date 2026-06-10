@@ -56,7 +56,7 @@ export default function App() {
       <TabNav
         tab={tab}
         onChange={setTab}
-        universeCount={status.data?.latest_run?.rows_found ?? null}
+        universeCount={status.data?.latest_success_run?.rows_found ?? null}
       />
 
       <main className="app-main">
