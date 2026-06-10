@@ -20,12 +20,22 @@ interface LatestRunRow {
   id: number;
   started_at: string;
   finished_at: string | null;
+  /** MAX(scraped_at) of the run's observations — the data's own timestamp. */
+  data_ts: string | null;
 }
 
 export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
   safeHandle(async () => {
+    // Latest SUCCESSFUL run by DATA time — run ids don't track data time
+    // (Wayback backfills insert older captures under newer ids).
     const latestRun = await env.DB.prepare(
-      `SELECT id, started_at, finished_at FROM scrape_runs ORDER BY id DESC LIMIT 1;`,
+      `SELECT sr.id, sr.started_at, sr.finished_at,
+              (SELECT MAX(so.scraped_at) FROM source_observations so
+                WHERE so.scrape_run_id = sr.id) AS data_ts
+       FROM scrape_runs sr
+       WHERE sr.status = 'success'
+       ORDER BY data_ts DESC
+       LIMIT 1;`,
     ).first<LatestRunRow>();
 
     if (!latestRun) {
@@ -46,7 +56,7 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) =>
       .all<VendorAggregateInput>();
 
     const aggregates = aggregateByVendor(obsRes.results);
-    const scrapedAt = latestRun.finished_at ?? latestRun.started_at;
+    const scrapedAt = latestRun.data_ts ?? latestRun.finished_at ?? latestRun.started_at;
 
     return {
       source_note: PASSMARK_NOTE,

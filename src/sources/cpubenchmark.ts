@@ -71,7 +71,11 @@ export async function scrapeAllRows(ctx: ScrapeContext): Promise<CpubenchmarkRow
   return scrapeListPage(ctx, ALL_URL);
 }
 
-async function scrapeListPage(ctx: ScrapeContext, url: string): Promise<CpubenchmarkRow[]> {
+/**
+ * Exported for scripts/backfill-wayback.ts, which points it at a Wayback
+ * snapshot of the list page (server-rendered, so the table parses the same).
+ */
+export async function scrapeListPage(ctx: ScrapeContext, url: string): Promise<CpubenchmarkRow[]> {
   const context = await createContext(ctx.browser);
   const page = await context.newPage();
 
