@@ -15,7 +15,7 @@ import OverviewDrawer, { type OverviewSelection } from './OverviewDrawer';
  * X-axis: 6 cells per row = (Server / Laptop / Desktop) × (Intel / AMD),
  *         grouped under segment headers.
  * Cells:  % change in avg price vs the most recent prior CAPTURED period,
- *         color-coded (red = price up = bad for buyer, green = price down =
+ *         color-coded (green = price up = bad for buyer, red = price down =
  *         good for buyer).
  *
  * Every captured cell stays clickable and opens an OverviewDrawer with the math.

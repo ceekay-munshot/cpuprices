@@ -29,14 +29,15 @@
   --border-strong:    #c8bea4;
   --border-on-dark:   #2a2f3a;
 
-  --accent-up:        #b8392c;   /* price ↑ (bad for buyer) */
-  --accent-down:      #166c3a;   /* price ↓ (good for buyer) */
+  --accent-up:        #166c3a;   /* price ↑ (bad for buyer) */
+  --accent-down:      #b8392c;   /* price ↓ (good for buyer) */
   --accent-flat:      #6b6557;
   --accent-na:        #a39e8d;
   --accent-link:      #2a3a82;
   --accent-badge:     #4f8a3a;   /* fresh badge */
   --accent-badge-warn:#a86a18;   /* stale badge */
   --accent-alert:     #e07b6a;   /* failure streak — legible red on the dark shell */
+  --accent-error:     #b8392c;   /* API / load failure — red regardless of the delta palette */
 
   /* Motion (transform/opacity only — GPU-composited) */
   --ease-out:    cubic-bezier(0.23, 1, 0.32, 1);
@@ -648,7 +649,7 @@ table.t {
   font-size: var(--fs-sm);
   font-style: italic;
 }
-.state-line--error { color: var(--accent-up); font-style: normal; }
+.state-line--error { color: var(--accent-error); font-style: normal; }
 
 .history-note {
   padding: var(--sp-3) var(--sp-4);

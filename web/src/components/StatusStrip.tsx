@@ -22,7 +22,7 @@ export default function StatusStrip({ status, loading, error }: Props) {
     return (
       <div className="status-strip">
         <div className="status-strip__inner">
-          <span style={{ color: 'var(--accent-up)', fontWeight: 600 }}>API error: {error}</span>
+          <span style={{ color: 'var(--accent-error)', fontWeight: 600 }}>API error: {error}</span>
         </div>
       </div>
     );
